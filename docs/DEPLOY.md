@@ -102,7 +102,48 @@ SQLite backup API, перенос uploads, проверка схемы, смен
    при обычном обновлении кода автоматически не устанавливаются: проверяйте их отдельно.
    `deploy/nginx.conf` — исходный HTTP-шаблон; не затирайте им работающий TLS-конфиг.
 
-## Проверки и журналы
+## Автоматическое обновление из GitHub
+
+Подготовлена служба `sm-instruction-github-sync.service` и таймер
+`sm-instruction-github-sync.timer`: проверка `Miandic/SM_instruction`, ветка `main`,
+через две минуты после завершения предыдущей проверки. Работает без GitHub-токена
+для публичного репозитория. Локальные незакоммиченные изменения не отправляются.
+
+Скрипт `deploy/github-sync.py` устанавливается отдельно в
+`/usr/local/lib/sm-instruction/`; автоматически себя не обновляет. Получение кода,
+Rustfmt, Clippy, тесты, release-сборка и проверка синтаксиса JS выполняются от
+`sm-build`. Пробный запуск использует SQLite backup рабочей БД и отдельный порт
+18081. Затем штатная активация создаёт резервную копию, переключает выпуск,
+перезапускает приложение и проверяет health; при отказе возвращает предыдущий код.
+Рабочая БД, uploads и env остаются на сервере.
+
+Изменения `src/db.rs` или `src/schema.sql` блокируются сравнением с
+`/var/lib/sm-instruction-deploy/approved-migrations`. Для их выпуска сначала
+проверить миграции вручную, выполнить штатный деплой и обновить одобренный SHA-256
+конкатенации этих двух файлов. Автоматического восстановления старой БД нет.
+Старые выпуски сохраняются; следите за свободным местом.
+
+Установка требует Git, Node.js, Rust 1.94.0 с компонентами rustfmt и clippy.
+Скопировать три файла `github-sync.py`, `sm-instruction-github-sync.service`,
+`sm-instruction-github-sync.timer` в `/tmp`, затем выполнить
+`deploy/install-github-sync.sh` от root. Установщик запускает первый деплой,
+но не включает таймер. Начальный отпечаток миграций берётся из исходников
+первого боевого выпуска `/opt/sm-instruction/build/source`.
+
+После успешного первого деплоя:
+
+```bash
+systemctl enable --now sm-instruction-github-sync.timer
+systemctl list-timers sm-instruction-github-sync.timer
+journalctl -u sm-instruction-github-sync.service -n 80 --no-pager
+cat /var/lib/sm-instruction-deploy/deployed
+```
+
+Ручная проверка/обновление: `systemctl start sm-instruction-github-sync.service`.
+Остановка будущих проверок: `systemctl disable --now sm-instruction-github-sync.timer`.
+Уже выполняющийся деплой этой командой не останавливается.
+
+## Проверки и журналы сервера
 
 На сервере:
 
