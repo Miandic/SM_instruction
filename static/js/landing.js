@@ -27,7 +27,6 @@ function orgCard(o) {
         <span class="org__logo"><img src="${esc(o.logo)}" alt="" loading="lazy"></span>
         <span class="org__name">${esc(o.name)}</span>
       </span>
-      <span class="org__desc">${esc(o.desc)}</span>
     </button>`;
 }
 

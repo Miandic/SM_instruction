@@ -8,6 +8,7 @@
 /*.db-wal
 *.log
 /static/uploads/
+/private-deploy/
 
 # Local assistant/editor settings
 /.claude/
