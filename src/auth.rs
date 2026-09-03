@@ -1,9 +1,9 @@
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use rand_core::OsRng;
 use axum::extract::{FromRequestParts, State};
 use axum::http::{header, request::Parts};
 use axum::Json;
+use rand_core::OsRng;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::FromRow;
@@ -72,6 +72,16 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// Код организатора точки: 8 символов без похожих друг на друга (0/O, 1/I).
+pub fn gen_code() -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // ровно 32 символа
+    let mut buf = [0u8; 8];
+    rand_core::RngCore::fill_bytes(&mut OsRng, &mut buf);
+    buf.iter()
+        .map(|b| ALPHABET[(b & 31) as usize] as char)
+        .collect()
+}
+
 pub fn hash_password(password: &str) -> Result<String, ApiError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
@@ -82,24 +92,26 @@ pub fn hash_password(password: &str) -> Result<String, ApiError> {
 
 pub fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
-        .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
+        .map(|h| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &h)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
 async fn create_session(state: &AppState, user_id: i64) -> ApiResult<String> {
-    let token = format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    );
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let now = now_ts();
-    sqlx::query("INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
-        .bind(&token)
-        .bind(user_id)
-        .bind(now)
-        .bind(now + SESSION_TTL)
-        .execute(&state.db_w)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&token)
+    .bind(user_id)
+    .bind(now)
+    .bind(now + SESSION_TTL)
+    .execute(&state.db_w)
+    .await?;
     Ok(token)
 }
 
@@ -115,7 +127,7 @@ async fn me_json(state: &AppState, user_id: i64) -> ApiResult<Value> {
     .bind(user_id)
     .fetch_one(&state.db)
     .await?;
-    Ok(serde_json::to_value(user).map_err(|e| ApiError::Internal(e.to_string()))?)
+    serde_json::to_value(user).map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -127,9 +139,7 @@ pub struct RegisterBody {
     pub role: String,
     /// для старосты/студента: название группы, например "СМ1-11"
     pub group_name: Option<String>,
-    /// для организатора: id точки
-    pub point_id: Option<i64>,
-    /// регистрационный код, если требуется
+    /// для организатора — код его точки; для команды — общий код, если задан
     pub code: Option<String>,
 }
 
@@ -140,10 +150,14 @@ pub async fn register(
     let login = body.login.trim().to_string();
     let display_name = body.display_name.trim().to_string();
     if login.len() < 3 {
-        return Err(ApiError::BadRequest("логин должен быть не короче 3 символов".into()));
+        return Err(ApiError::BadRequest(
+            "логин должен быть не короче 3 символов".into(),
+        ));
     }
     if body.password.len() < 6 {
-        return Err(ApiError::BadRequest("пароль должен быть не короче 6 символов".into()));
+        return Err(ApiError::BadRequest(
+            "пароль должен быть не короче 6 символов".into(),
+        ));
     }
     if display_name.is_empty() {
         return Err(ApiError::BadRequest("укажите имя".into()));
@@ -170,21 +184,22 @@ pub async fn register(
             (Some(id), None)
         }
         ROLE_ORGANIZER => {
-            if let Some(required) = &state.cfg.organizer_code {
-                if body.code.as_deref() != Some(required.as_str()) {
-                    return Err(ApiError::Forbidden("неверный код организатора".into()));
-                }
-            }
-            let point_id = body
-                .point_id
-                .ok_or_else(|| ApiError::BadRequest("укажите точку".into()))?;
-            let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM points WHERE id = ?")
-                .bind(point_id)
-                .fetch_one(&state.db)
-                .await?;
-            if exists == 0 {
-                return Err(ApiError::NotFound("точка не найдена".into()));
-            }
+            // Код выдаётся под конкретную точку — он же и определяет доступы.
+            let code = body
+                .code
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ApiError::BadRequest("укажите код организатора".into()))?;
+
+            let point_id: Option<i64> =
+                sqlx::query_scalar("SELECT id FROM points WHERE organizer_code = ?")
+                    .bind(code)
+                    .fetch_optional(&state.db)
+                    .await?;
+            let point_id =
+                point_id.ok_or_else(|| ApiError::Forbidden("неверный код организатора".into()))?;
+
             (None, Some(point_id))
         }
         _ => {

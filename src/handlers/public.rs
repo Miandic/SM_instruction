@@ -26,30 +26,28 @@ pub async fn groups(State(state): State<AppState>) -> ApiResult<Json<Vec<GroupBr
 
 /// Каталог персонажей — публичный.
 pub async fn characters(State(state): State<AppState>) -> ApiResult<Json<Vec<Character>>> {
-    let rows = sqlx::query_as::<_, Character>(
-        "SELECT id, name, description FROM characters ORDER BY id",
-    )
-    .fetch_all(&state.db)
-    .await?;
+    let rows =
+        sqlx::query_as::<_, Character>("SELECT id, name, description FROM characters ORDER BY id")
+            .fetch_all(&state.db)
+            .await?;
     Ok(Json(rows))
 }
 
-/// Публичный: нужен форме регистрации организатора.
+/// Каталог активных точек для авторизованной части приложения.
 pub async fn points(State(state): State<AppState>) -> ApiResult<Json<Vec<Point>>> {
     let rows = sqlx::query_as::<_, Point>(
-        "SELECT id, name, description, location, is_active FROM points WHERE is_active = 1 ORDER BY name",
+        "SELECT id, name, description, logo_url, image_urls, location, kind, is_active
+         FROM points WHERE is_active = 1 ORDER BY name",
     )
     .fetch_all(&state.db)
     .await?;
     Ok(Json(rows))
 }
 
-pub async fn point(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> ApiResult<Json<Point>> {
+pub async fn point(State(state): State<AppState>, Path(id): Path<i64>) -> ApiResult<Json<Point>> {
     sqlx::query_as::<_, Point>(
-        "SELECT id, name, description, location, is_active FROM points WHERE id = ?",
+        "SELECT id, name, description, logo_url, image_urls, location, kind, is_active
+         FROM points WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -86,7 +84,10 @@ pub async fn slots(
     Ok(Json(rows))
 }
 
-pub async fn rating(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Vec<RatingRow>>> {
+pub async fn rating(
+    State(state): State<AppState>,
+    _user: AuthUser,
+) -> ApiResult<Json<Vec<RatingRow>>> {
     let rows = sqlx::query_as::<_, RatingRow>(&format!(
         "SELECT g.id, g.name, g.department, c.name AS character_name,
                 COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) AS total_points,
@@ -118,7 +119,7 @@ pub async fn group_detail(
 
     let scores = sqlx::query_as::<_, ScoreView>(
         "SELECT se.id, se.group_id, g.name AS group_name, se.point_id, p.name AS point_name,
-                u.display_name AS organizer_name, se.points, se.comment, se.created_at
+                u.display_name AS organizer_name, se.kind, se.points, se.comment, se.created_at
          FROM score_entries se
          JOIN groups g ON g.id = se.group_id
          JOIN points p ON p.id = se.point_id
@@ -131,7 +132,7 @@ pub async fn group_detail(
 
     let bookings = sqlx::query_as::<_, BookingView>(
         "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at,
-                b.status, b.created_at
+                b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.group_id = ? ORDER BY s.starts_at",
     )
@@ -139,7 +140,105 @@ pub async fn group_detail(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(json!({ "group": group, "scores": scores, "bookings": bookings })))
+    let (stats, spent) = load_stats(&state, id).await?;
+    let available = (group.total_points - spent).max(0);
+
+    Ok(Json(json!({
+        "group": group,
+        "scores": scores,
+        "bookings": bookings,
+        // прокачка персонажа: значения характеристик и нераспределённые баллы
+        "stats": stats,
+        "spent": spent,
+        "available": available,
+        "upgrade_cost": UPGRADE_COST,
+    })))
+}
+
+/// Характеристики команды. Все ключи присутствуют всегда (ненайденные — нули).
+/// Второе значение — сколько баллов на них уже списано.
+async fn load_stats(state: &AppState, group_id: i64) -> ApiResult<(Value, i64)> {
+    let rows: Vec<(String, i64, i64)> =
+        sqlx::query_as("SELECT stat, value, spent FROM group_stats WHERE group_id = ?")
+            .bind(group_id)
+            .fetch_all(&state.db)
+            .await?;
+
+    let mut stats = serde_json::Map::new();
+    for key in STAT_KEYS {
+        stats.insert(key.to_string(), json!(0));
+    }
+
+    let mut spent = 0;
+    for (stat, value, cost) in rows {
+        // потраченное считаем по всем строкам: набор характеристик мог меняться
+        spent += cost;
+        if stats.contains_key(&stat) {
+            stats.insert(stat, json!(value));
+        }
+    }
+
+    Ok((Value::Object(stats), spent))
+}
+
+#[derive(Deserialize)]
+pub struct UpgradeBody {
+    pub stat: String,
+}
+
+/// Староста тратит баллы команды на одну характеристику.
+/// Цена списывается в момент покупки и хранится рядом со значением —
+/// поменяется константа, уже потраченное пересчитывать не придётся.
+pub async fn upgrade_stat(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<UpgradeBody>,
+) -> ApiResult<Json<Value>> {
+    user.require(&[ROLE_LEADER])?;
+    let group_id = user.group()?;
+
+    if !STAT_KEYS.contains(&body.stat.as_str()) {
+        return Err(ApiError::BadRequest("неизвестная характеристика".into()));
+    }
+
+    // Проверка баланса и списание — в одной транзакции на единственном пишущем
+    // соединении: два запроса подряд не смогут потратить одни и те же баллы.
+    let mut tx = state.db_w.begin().await?;
+
+    let total: i64 =
+        sqlx::query_scalar("SELECT COALESCE(SUM(points), 0) FROM score_entries WHERE group_id = ?")
+            .bind(group_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let spent: i64 =
+        sqlx::query_scalar("SELECT COALESCE(SUM(spent), 0) FROM group_stats WHERE group_id = ?")
+            .bind(group_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    if total - spent < UPGRADE_COST {
+        return Err(ApiError::Conflict("не хватает очков".into()));
+    }
+
+    let value: i64 = sqlx::query_scalar(
+        "INSERT INTO group_stats (group_id, stat, value, spent) VALUES (?, ?, 1, ?)
+         ON CONFLICT(group_id, stat) DO UPDATE
+            SET value = value + 1, spent = spent + excluded.spent
+         RETURNING value",
+    )
+    .bind(group_id)
+    .bind(&body.stat)
+    .bind(UPGRADE_COST)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(Json(json!({
+        "stat": body.stat,
+        "value": value,
+        "available": total - spent - UPGRADE_COST,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -164,14 +263,13 @@ pub async fn pick_character(
         return Err(ApiError::NotFound("персонаж не найден".into()));
     }
 
-    let updated = sqlx::query(
-        "UPDATE groups SET character_id = ? WHERE id = ? AND character_id IS NULL",
-    )
-    .bind(body.character_id)
-    .bind(group_id)
-    .execute(&state.db_w)
-    .await?
-    .rows_affected();
+    let updated =
+        sqlx::query("UPDATE groups SET character_id = ? WHERE id = ? AND character_id IS NULL")
+            .bind(body.character_id)
+            .bind(group_id)
+            .execute(&state.db_w)
+            .await?
+            .rows_affected();
 
     if updated == 0 {
         return Err(ApiError::Conflict(

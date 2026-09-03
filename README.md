@@ -11,10 +11,20 @@ Rust (axum + SQLx) + SQLite. Фронтенд — статика из `static/`,
 
 ## Запуск
 
-```sh
-cp .env.example .env   # настроить ADMIN_PASSWORD и коды регистрации
-cargo run              # http://localhost:8080
+```powershell
+Copy-Item .env.example .env  # задать сильный ADMIN_PASSWORD и коды регистрации
+cargo run                    # http://localhost:8080
 ```
 
 При первом запуске создаются: админ (`ADMIN_LOGIN`/`ADMIN_PASSWORD`), 13 групп-заглушек
 (СМ1-11 … СМ13-11) и стартовые персонажи. API описан в docs/PLAN.md.
+
+## Проверки
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets
+```
+
+Карта кода, инварианты и актуальный технический долг находятся в [AGENTS.md](AGENTS.md).

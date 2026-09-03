@@ -7,10 +7,12 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue};
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers::{admin, booking, organizer, public};
@@ -33,8 +35,9 @@ async fn main() {
         db,
         db_w,
         cfg: Arc::new(Config {
-            registration_code: std::env::var("REGISTRATION_CODE").ok().filter(|s| !s.is_empty()),
-            organizer_code: std::env::var("ORGANIZER_CODE").ok().filter(|s| !s.is_empty()),
+            registration_code: std::env::var("REGISTRATION_CODE")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }),
     };
 
@@ -58,21 +61,45 @@ async fn main() {
         .route("/bookings/my", get(booking::my))
         .route("/bookings/{id}", delete(booking::cancel))
         .route("/character", post(public::pick_character))
+        .route("/character/upgrade", post(public::upgrade_stat))
         // организатор точки
         .route("/organizer/bookings", get(organizer::bookings))
         .route("/organizer/complete", post(organizer::complete))
         // админ
         .route("/admin/users", get(admin::users))
-        .route("/admin/users/{id}", patch(admin::patch_user).delete(admin::delete_user))
+        .route(
+            "/admin/users/{id}",
+            patch(admin::patch_user).delete(admin::delete_user),
+        )
         .route("/admin/groups", post(admin::create_group))
-        .route("/admin/groups/{id}", patch(admin::patch_group).delete(admin::delete_group))
-        .route("/admin/points", get(admin::all_points).post(admin::create_point))
-        .route("/admin/points/{id}", patch(admin::patch_point).delete(admin::delete_point))
+        .route(
+            "/admin/groups/{id}",
+            patch(admin::patch_group).delete(admin::delete_group),
+        )
+        .route(
+            "/admin/points",
+            get(admin::all_points).post(admin::create_point),
+        )
+        .route(
+            "/admin/points/{id}",
+            patch(admin::patch_point).delete(admin::delete_point),
+        )
+        .route("/admin/points/{id}/code", post(admin::regenerate_code))
+        .route(
+            "/admin/uploads",
+            post(admin::upload_image).layer(DefaultBodyLimit::max(9 * 1024 * 1024)),
+        )
         .route("/admin/slots", post(admin::generate_slots))
         .route("/admin/slots/{id}", delete(admin::delete_slot))
-        .route("/admin/bookings", get(admin::bookings).post(admin::create_booking))
+        .route(
+            "/admin/bookings",
+            get(admin::bookings).post(admin::create_booking),
+        )
         .route("/admin/bookings/{id}", patch(admin::patch_booking))
-        .route("/admin/scores", get(admin::scores).post(admin::create_score))
+        .route(
+            "/admin/scores",
+            get(admin::scores).post(admin::create_score),
+        )
         .route("/admin/scores/{id}", delete(admin::delete_score))
         .route("/admin/characters", post(admin::create_character))
         .route("/admin/characters/{id}", delete(admin::delete_character));
@@ -80,8 +107,15 @@ async fn main() {
     let app = Router::new()
         .nest("/api", api)
         .fallback_service(ServeDir::new("static"))
+        // Без этого браузер кеширует статику эвристически (Cache-Control ServeDir
+        // не ставит) и после обновления сайта может держать старый JS. `no-cache`
+        // — не «не кешировать», а «каждый раз спрашивать»: ServeDir отвечает 304,
+        // пока файл не менялся, так что трафика это почти не добавляет.
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
         .with_state(state);
 
     // BIND_ADDR имеет приоритет; PORT — для запуска из инструментов с автоподбором порта
@@ -89,7 +123,9 @@ async fn main() {
         let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
         format!("0.0.0.0:{port}")
     });
-    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind failed");
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .expect("bind failed");
     // 0.0.0.0 — адрес для bind, в браузере он не открывается; показываем кликабельный localhost
     let shown = addr.replace("0.0.0.0", "localhost");
     tracing::info!("сервер запущен на http://{shown} (bind: {addr})");

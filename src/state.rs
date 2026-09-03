@@ -5,8 +5,8 @@ use sqlx::SqlitePool;
 pub struct Config {
     /// общий код для регистрации старост и студентов (None = регистрация открыта)
     pub registration_code: Option<String>,
-    /// код для регистрации организаторов точек
-    pub organizer_code: Option<String>,
+    // Организаторы регистрируются по коду своей точки (points.organizer_code),
+    // который выдаёт и перегенерирует админ, — общего кода для них нет.
 }
 
 #[derive(Clone)]

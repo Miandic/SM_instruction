@@ -1,0 +1,422 @@
+/* Главная вошедшего студента или старосты: радиальное меню.
+   В центре — персонаж, по кругу равномерно лучи к точкам.
+   Меню три, стрелки переключают их по кругу:
+     организации (точки типа noc) → активности → обязательные точки.
+   Клик по лучу открывает укороченную карточку с расписанием. */
+
+import { AD_BANNERS, HERO_IMAGE, PLACEHOLDER_LOGO } from '../content.js';
+import { $, api, ask, esc, state, flash, fmtT, fmtDT, bindActions } from './core.js';
+import { adBanner } from './banner.js';
+import { openSheet, sheetBar, isSheetOpen } from './sheet.js';
+import { bookingCtx, slotChips } from './slots.js';
+import { startFloat } from './float.js';
+
+/* Геометрия колеса — в процентах от его стороны (контейнер квадратный).
+   RING — радиус, на котором стоят точки; лучи идут от края центральной
+   кнопки (RAY_FROM) до края кружка точки (RAY_TO). */
+const RING = 34;
+const RAY_FROM = 16;
+const RAY_TO = 25.5;
+
+const f = n => n.toFixed(2);
+
+/** Цвет луча говорит о состоянии; текст нужен только скринридеру. */
+const STATE_LABELS = { booked: 'вы записаны', done: 'точка пройдена' };
+
+let hubHost = null;
+let menuIndex = 0;
+let currentItem = null;
+let tableTimer = null;
+/** Данные последней загрузки: переключение меню по ним же, без новых запросов. */
+let data = {
+  points: [], ctx: bookingCtx([]), bookings: [], preview: false,
+  groupId: null, groups: [], routeBase: '#/home',
+};
+
+// ---------- меню ----------
+
+/** API-точка одновременно является карточкой и источником расписания. */
+const fromPoint = p => ({
+  id: 'p-' + p.id,
+  name: p.name,
+  desc: p.description,
+  logo: p.logo_url || PLACEHOLDER_LOGO,
+  about: p.description ? p.description.split(/\n\s*\n/).filter(Boolean) : [],
+  images: (p.image_urls || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean),
+  point: p,
+});
+
+function menus(points) {
+  const ofKind = kind => points.filter(p => p.kind === kind).map(fromPoint);
+  return [
+    {
+      title: 'Организации',
+      items: ofKind('noc'),
+      empty: 'Организации появятся позже.',
+    },
+    {
+      title: 'Активности',
+      items: ofKind('activity'),
+      empty: 'Дополнительные активности пока не заведены.',
+    },
+    {
+      title: 'Обязательные точки',
+      items: ofKind('mandatory'),
+      empty: 'Обязательные точки пока не заведены.',
+    },
+  ];
+}
+
+/** Ищет элемент по id во всех меню: ссылка может вести в любое из них. */
+function findItem(id) {
+  const all = menus(data.points);
+  for (let i = 0; i < all.length; i++) {
+    const item = all[i].items.find(x => x.id === id);
+    if (item) return { item, menu: i };
+  }
+  return null;
+}
+
+/** Обратный поиск: в чьей карточке живёт эта точка (для кнопки у брони). */
+const itemOfPoint = pointId =>
+  menus(data.points).flatMap(m => m.items).find(x => x.point?.id === pointId);
+
+// ---------- радиальное меню ----------
+
+export async function renderHub(host, options = {}) {
+  hubHost = host;
+  const preview = options.preview === true;
+  let groups = [];
+  let groupId = null;
+  let myBookings = [];
+  const points = await api('/points');
+
+  if (preview) {
+    groups = await api('/groups');
+    const requested = Number(options.groupId);
+    groupId = groups.some(g => g.id === requested) ? requested : groups[0]?.id;
+    if (groupId) myBookings = (await api('/groups/' + groupId)).bookings;
+  } else if (state.me.group_id) {
+    groupId = state.me.group_id;
+    myBookings = await api('/bookings/my');
+  }
+  state.cache.points = points;
+  data = {
+    points,
+    ctx: bookingCtx(myBookings),
+    bookings: myBookings,
+    preview,
+    groupId,
+    groups,
+    routeBase: preview ? '#/preview/' + (groupId || '') : '#/home',
+  };
+
+  paint();
+}
+
+/** Перерисовка колеса по уже загруженным данным — стрелки ходят без запросов. */
+function paint() {
+  const host = hubHost;
+  if (!host?.isConnected) return;
+
+  const all = menus(data.points);
+  menuIndex = ((menuIndex % all.length) + all.length) % all.length;
+  const menu = all[menuIndex];
+  const { ctx } = data;
+
+  // луч красит и обычная бронь, и назначенная админом
+  const activeIds = [ctx.active, ...ctx.fixed].filter(Boolean).map(b => b.point_id);
+  const stateOf = item => {
+    const p = item.point;
+    if (!p) return '';
+    // «пройдено» — организатор подтвердил визит; такую точку уже не занять
+    if (ctx.completed.has(p.id)) return 'done';
+    if (activeIds.includes(p.id)) return 'booked';
+    return '';
+  };
+
+  const activeItem = ctx.active && itemOfPoint(ctx.active.point_id);
+
+  host.innerHTML = `
+    <section class="wrap section hub">
+      ${data.preview ? previewBar() : ''}
+      <div class="hub__title">
+        <h2>${esc(menu.title)}</h2>
+        <div class="hub__dots" aria-hidden="true">
+          ${all.map((_, i) => `<i class="${i === menuIndex ? 'is-on' : ''}"></i>`).join('')}
+        </div>
+      </div>
+
+      ${wheelHtml(menu.items, stateOf)}
+      ${menu.items.length ? '' : `<p class="note note--empty">${esc(menu.empty)}</p>`}
+
+      <div class="hub__links">
+        ${arrow('prev', 'Предыдущее меню', 'M15 18 9 12l6-6')}
+        <a class="btn btn--sm" href="${data.preview
+          ? '#/preview-hero/' + data.groupId : '#/app/team'}">${data.preview ? 'Персонаж' : 'Моя команда'}</a>
+        <a class="btn btn--sm" href="#/app/rating">Рейтинг</a>
+        ${arrow('next', 'Следующее меню', 'm9 18 6-6-6-6')}
+      </div>
+
+      ${adBanner(AD_BANNERS.hub, 'compact')}
+
+      ${ctx.active ? `
+        <div class="notice">
+          <span class="notice__dot"></span>
+          <div>
+            <b>Активная бронь: ${esc(ctx.active.point_name)}</b>
+            <span>${fmtDT(ctx.active.starts_at)}–${fmtT(ctx.active.ends_at)}</span>
+            <div class="notice__actions">
+              ${activeItem
+                ? `<button class="btn btn--sm" data-act="open" data-id="${esc(activeItem.id)}">Карточка</button>`
+                : ''}
+              ${state.me.role === 'leader' || data.preview
+                ? `<button class="btn btn--sm btn--danger" data-act="cancel"
+                           data-id="${ctx.active.id}" ${data.preview
+                             ? 'disabled title="предпросмотр без изменения данных"' : ''}>Отменить бронь</button>`
+                : ''}
+            </div>
+          </div>
+        </div>` : ''}
+
+      ${fixedHtml(ctx.fixed)}
+    </section>`;
+
+  bindActions(host, {
+    open: ({ id }) => {
+      const target = data.routeBase + '/' + id;
+      // если карточку закрыли мимо роутера (Esc в некоторых браузерах),
+      // хеш уже нужный и hashchange не сработает — открываем сами
+      if (location.hash === target) return openItemSheet(id);
+      location.hash = target;
+      return undefined;
+    },
+    hero: () => {
+      location.hash = data.preview ? '#/preview-hero/' + data.groupId : '#/hero';
+    },
+    'preview-group': () => {
+      const id = $('#preview-group').value;
+      location.hash = '#/preview/' + id;
+    },
+    cancel: ({ id }) => cancelBooking(id),
+    prev: () => { menuIndex--; paint(); },
+    next: () => { menuIndex++; paint(); },
+  });
+
+  // колесо ожило: элементы слегка дрейфуют и тянутся к курсору
+  startFloat(host.querySelector('.wheel'));
+}
+
+function previewBar() {
+  return `
+    <div class="previewbar">
+      <div>
+        <b>Предпросмотр старосты</b>
+        <span>Только просмотр: действия не изменяют данные.</span>
+      </div>
+      <div class="previewbar__controls">
+        <select id="preview-group" aria-label="Учебная группа">
+          ${data.groups.map(g => `<option value="${g.id}" ${g.id === data.groupId ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn--sm" data-act="preview-group">Показать</button>
+        <a class="btn btn--sm" href="#/app/admin">Вернуться в админку</a>
+      </div>
+    </div>`;
+}
+
+const arrow = (act, label, path) => `
+  <button class="btn btn--icon" data-act="${act}" aria-label="${label}">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>
+  </button>`;
+
+function wheelHtml(items, stateOf) {
+  const step = 360 / Math.max(items.length, 1);
+  const angle = i => ((-90 + i * step) * Math.PI) / 180;
+
+  const rays = items.map((o, i) => {
+    const a = angle(i);
+    const st = stateOf(o);
+    return `<line class="${st ? 'is-' + st : ''}"
+                  x1="${f(50 + RAY_FROM * Math.cos(a))}" y1="${f(50 + RAY_FROM * Math.sin(a))}"
+                  x2="${f(50 + RAY_TO * Math.cos(a))}" y2="${f(50 + RAY_TO * Math.sin(a))}"/>`;
+  }).join('');
+
+  const nodes = items.map((o, i) => {
+    const a = angle(i);
+    const st = stateOf(o);
+    return `
+      <button class="node ${st ? 'node--' + st : ''}"
+              style="--x:${f(50 + RING * Math.cos(a))};--y:${f(50 + RING * Math.sin(a))}"
+              data-act="open" data-id="${esc(o.id)}"
+              aria-label="${esc(o.name)}${st ? ' — ' + STATE_LABELS[st] : ''}">
+        <span class="node__logo"><img src="${esc(o.logo)}" alt="" loading="lazy"></span>
+        <span class="node__name">${esc(o.name)}</span>
+      </button>`;
+  }).join('');
+
+  return `
+    <div class="wheel">
+      <svg class="wheel__rays" viewBox="0 0 100 100" aria-hidden="true">
+        <circle class="wheel__ring" cx="50" cy="50" r="${RING}"/>
+        <g class="wheel__lines">${rays}</g>
+      </svg>
+
+      <button class="core" data-act="hero">
+        <!-- ЗАМЕНИТЬ НА ИЗОБРАЖЕНИЕ ПЕРСОНАЖА (content.js → HERO_IMAGE) -->
+        <span class="core__art ${HERO_IMAGE === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
+          <img src="${esc(HERO_IMAGE)}" alt="">
+        </span>
+        <span class="core__label">Персонаж</span>
+      </button>
+
+      ${nodes}
+    </div>`;
+}
+
+/** Назначенные админом точки: экзамен, босс, администрация.
+    Показываем время, но кнопок нет — ни отменить, ни перенести нельзя. */
+function fixedHtml(fixed) {
+  if (!fixed.length) return '';
+
+  const rows = [...fixed]
+    .sort((a, b) => a.starts_at - b.starts_at)
+    .map(b => `
+      <div class="fixed__row">
+        <b>${esc(b.point_name)}</b>
+        <span>${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}</span>
+      </div>`).join('');
+
+  return `
+    <div class="card fixed">
+      <h2 class="fixed__head">Назначенные точки</h2>
+      ${rows}
+      <p class="note">Время назначают организаторы — отменить или перенести нельзя.
+        На запись к организациям эти точки не влияют.</p>
+    </div>`;
+}
+
+/** Отмена брони: доступна и с колеса, и из карточки. */
+async function cancelBooking(id) {
+  const yes = await ask('Отменить бронь? Слот освободится, и можно будет записаться на другую точку.',
+    { ok: 'Отменить бронь', cancel: 'Оставить', danger: true });
+  if (!yes) return;
+  await api('/bookings/' + id, 'DELETE');
+  flash('Бронь отменена');
+  if (isSheetOpen()) await fillBooking();
+  if (hubHost?.isConnected) await renderHub(hubHost);
+}
+
+// ---------- укороченная карточка ----------
+
+export async function openItemSheet(id) {
+  const found = findItem(id);
+  if (!found) { location.hash = data.routeBase; return; }
+
+  currentItem = found.item;
+  // ссылка могла прийти из другого меню — покажем за карточкой то самое колесо
+  if (found.menu !== menuIndex) { menuIndex = found.menu; paint(); }
+  clearInterval(tableTimer);
+
+  const o = currentItem;
+  openSheet(`
+    <div class="sheet__scroll">
+      ${sheetBar()}
+      <div class="wrap sheet__body">
+        <div class="bubble">
+          <span class="org__logo"><img src="${esc(o.logo)}" alt=""></span>
+          <h2>${esc(o.name)}</h2>
+        </div>
+
+        <article class="paper">
+          ${o.desc ? `<p>${esc(o.desc)}</p>` : ''}
+          ${(o.about?.length || o.images?.length)
+            ? `<a class="link" href="#/org/${esc(o.id)}">Подробнее об организации</a>` : ''}
+          <div class="booking" id="booking"><p class="note">Загружаем расписание…</p></div>
+        </article>
+      </div>
+    </div>`, {
+    book: async ({ id: slotId }) => {
+      await api('/bookings', 'POST', { slot_id: Number(slotId) });
+      flash('Слот забронирован');
+      await fillBooking();
+      // на колесе луч перекрашивается в фиолетовый
+      if (hubHost?.isConnected) await renderHub(hubHost);
+    },
+    cancel: ({ id: bookingId }) => cancelBooking(bookingId),
+    // бронь занята другой точкой — открываем её карточку
+    goto: ({ id: itemId }) => { location.hash = '#/home/' + itemId; },
+  });
+
+  await fillBooking();
+
+  // Слоты разбирают параллельно, поэтому пока карточка открыта — подтягиваем
+  // занятость. Событию `close` у <dialog> доверять нельзя (в webview оно
+  // приходит не всегда), поэтому таймер сам проверяет, открыта ли карточка.
+  tableTimer = setInterval(() => {
+    if (!isSheetOpen()) { clearInterval(tableTimer); return; }
+    fillBooking().catch(() => {});
+  }, 20000);
+}
+
+/** Подгружает расписание точки в открытую карточку. */
+async function fillBooking() {
+  const host = $('#booking');
+  if (!host || !currentItem) return;
+
+  const point = currentItem.point;
+  const slots = await api('/slots?point_id=' + point.id);
+  const myBookings = data.preview
+    ? data.bookings
+    : state.me.group_id ? await api('/bookings/my') : [];
+  if (data.preview) {
+    const mine = new Set(myBookings
+      .filter(b => b.status === 'active' || b.status === 'completed')
+      .map(b => b.slot_id));
+    for (const slot of slots) slot.mine = mine.has(slot.id);
+  }
+
+  host.innerHTML = bookingHtml(point, slots, bookingCtx(myBookings));
+}
+
+function bookingHtml(point, slots, ctx) {
+  return `
+    <h3 class="booking__head">Расписание</h3>
+    <p class="note">${esc(point.location || 'Место уточняется')}</p>
+    ${hintFor(point, ctx)}
+    ${slotChips(slots, point, ctx, Date.now() / 1000,
+      data.preview ? { role: 'leader', readOnly: true } : {})}`;
+}
+
+/** Почему кнопки записи может не быть — объясняем до того, как её нажмут. */
+function hintFor(point, ctx) {
+  if (point.kind === 'mandatory') {
+    return note('Обязательная точка — время назначают организаторы, записываться не нужно.');
+  }
+  if (data.preview) return note('Предпросмотр: запись и отмена брони отключены.');
+  if (state.me.role !== 'leader') {
+    return note('Записывает команду только староста.');
+  }
+  if (ctx.completed.has(point.id)) return note('Ваша команда уже прошла эту точку.');
+
+  if (ctx.active?.point_id === point.id) {
+    return note('Ваша команда записана на эту точку. Кнопка «Отменить» — в блоке слота.');
+  }
+  if (ctx.visited.has(point.id)) return note('Ваша команда уже записывалась на эту точку.');
+
+  if (ctx.active) {
+    // до чужой брони отсюда не дотянуться — даём кнопку в её карточку
+    const item = itemOfPoint(ctx.active.point_id);
+    return note(
+      `Сначала завершите или отмените бронь: ${ctx.active.point_name}.`,
+      item ? `<button class="btn btn--sm" data-act="goto" data-id="${esc(item.id)}">Перейти к брони</button>` : '',
+    );
+  }
+  return note('Занять слот можно не раньше чем за 15 минут до его начала.');
+}
+
+const note = (text, action = '') => `
+  <div class="note note--empty">
+    ${esc(text)}
+    ${action ? `<span class="note__act">${action}</span>` : ''}
+  </div>`;

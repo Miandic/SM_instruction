@@ -12,13 +12,24 @@ CREATE TABLE IF NOT EXISTS groups (
     created_at   INTEGER NOT NULL
 );
 
+-- kind: noc — точка НОЦ (две оценки: тест и прохождение)
+--       activity — доп. активность (одна оценка за прохождение)
+--       mandatory — обязательная точка (без баллов, записывает админ)
 CREATE TABLE IF NOT EXISTS points (
-    id          INTEGER PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    location    TEXT NOT NULL DEFAULT '',
-    is_active   INTEGER NOT NULL DEFAULT 1
+    id             INTEGER PRIMARY KEY,
+    name           TEXT NOT NULL,
+    description    TEXT NOT NULL DEFAULT '',
+    logo_url       TEXT NOT NULL DEFAULT '',
+    -- адреса изображений галереи, по одному в строке
+    image_urls     TEXT NOT NULL DEFAULT '',
+    location       TEXT NOT NULL DEFAULT '',
+    kind           TEXT NOT NULL DEFAULT 'noc' CHECK (kind IN ('noc', 'activity', 'mandatory')),
+    -- код, по которому организатор регистрируется именно на эту точку
+    organizer_code TEXT,
+    is_active      INTEGER NOT NULL DEFAULT 1
 );
+-- индекс по organizer_code создаёт migrate() в db.rs: на старых базах
+-- колонка появляется только после ALTER TABLE
 
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY,
@@ -56,25 +67,42 @@ CREATE TABLE IF NOT EXISTS bookings (
     slot_id    INTEGER NOT NULL REFERENCES slots(id) ON DELETE CASCADE,
     group_id   INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     status     TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
+    -- бронь на обязательную точку: назначается заранее и не занимает
+    -- единственный слот команды (иначе она не смогла бы записаться никуда ещё)
+    mandatory  INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 
--- не больше одной активной брони на команду
-CREATE UNIQUE INDEX IF NOT EXISTS one_active_booking_per_group
-    ON bookings(group_id) WHERE status = 'active';
+-- индекс «не больше одной активной брони на команду» создаёт migrate() в db.rs:
+-- он опирается на колонку mandatory, которой на старых базах ещё нет
 
 CREATE INDEX IF NOT EXISTS bookings_by_slot ON bookings(slot_id);
 
+-- kind: test — за тест (только точки НОЦ), task — за прохождение точки,
+--       manual — ручное начисление админом
 CREATE TABLE IF NOT EXISTS score_entries (
     id           INTEGER PRIMARY KEY,
     group_id     INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     point_id     INTEGER NOT NULL REFERENCES points(id) ON DELETE CASCADE,
     organizer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     booking_id   INTEGER REFERENCES bookings(id) ON DELETE SET NULL,
+    kind         TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('test', 'task', 'manual')),
     points       INTEGER NOT NULL,
     comment      TEXT NOT NULL DEFAULT '',
     created_at   INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS scores_by_group ON score_entries(group_id);
+
+-- Прокачка персонажа: строка на каждую характеристику команды.
+-- Ключи характеристик — STAT_KEYS в models.rs, подписи — в static/content.js.
+CREATE TABLE IF NOT EXISTS group_stats (
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    stat     TEXT NOT NULL,
+    value    INTEGER NOT NULL DEFAULT 0,
+    -- сколько баллов уже списано на эту характеристику: цена уровня может
+    -- поменяться, а потраченное должно остаться потраченным
+    spent    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, stat)
+);

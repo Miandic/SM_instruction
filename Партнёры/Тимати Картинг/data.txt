@@ -1,0 +1,6 @@
+name
+Тимати Картинг
+text
+
+link
+http://rvr.timatikarting.ru

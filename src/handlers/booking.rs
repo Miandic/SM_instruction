@@ -16,6 +16,18 @@ pub struct CreateBookingBody {
     pub slot_id: i64,
 }
 
+fn validate_booking_window(now: i64, starts_at: i64, ends_at: i64) -> ApiResult<()> {
+    if now < starts_at.saturating_sub(BOOKING_WINDOW) {
+        return Err(ApiError::BadRequest(
+            "занять слот можно не раньше чем за 15 минут до его начала".into(),
+        ));
+    }
+    if now >= ends_at {
+        return Err(ApiError::BadRequest("слот уже завершился".into()));
+    }
+    Ok(())
+}
+
 pub async fn create(
     State(state): State<AppState>,
     user: AuthUser,
@@ -25,7 +37,7 @@ pub async fn create(
     let group_id = user.group()?;
 
     let slot = sqlx::query_as::<_, Slot>(
-        "SELECT s.id, s.point_id, s.starts_at, s.ends_at, s.capacity
+        "SELECT s.id, s.point_id, s.starts_at, s.ends_at, s.capacity, p.kind
          FROM slots s JOIN points p ON p.id = s.point_id
          WHERE s.id = ? AND p.is_active = 1",
     )
@@ -34,15 +46,14 @@ pub async fn create(
     .await?
     .ok_or_else(|| ApiError::NotFound("слот не найден".into()))?;
 
-    let now = now_ts();
-    if now < slot.starts_at - BOOKING_WINDOW {
-        return Err(ApiError::BadRequest(
-            "занять слот можно не раньше чем за 15 минут до его начала".into(),
+    if slot.kind == KIND_MANDATORY {
+        return Err(ApiError::Forbidden(
+            "на обязательные точки команды записывают организаторы".into(),
         ));
     }
-    if now >= slot.ends_at {
-        return Err(ApiError::BadRequest("слот уже завершился".into()));
-    }
+
+    let now = now_ts();
+    validate_booking_window(now, slot.starts_at, slot.ends_at)?;
 
     // Все проверки и вставка — в одной транзакции на единственном пишущем
     // соединении, поэтому две команды не смогут занять последнее место одновременно.
@@ -57,11 +68,14 @@ pub async fn create(
         return Err(ApiError::Conflict("слот уже занят".into()));
     }
 
-    let has_active: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM bookings WHERE group_id = ? AND status = 'active'")
-            .bind(group_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    // обязательные точки назначены заранее и лимит не занимают
+    let has_active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bookings
+         WHERE group_id = ? AND status = 'active' AND mandatory = 0",
+    )
+    .bind(group_id)
+    .fetch_one(&mut *tx)
+    .await?;
     if has_active > 0 {
         return Err(ApiError::Conflict(
             "у команды уже есть активная бронь — сначала завершите или отмените её".into(),
@@ -106,9 +120,11 @@ pub async fn cancel(
     user.require(&[ROLE_LEADER])?;
     let group_id = user.group()?;
 
+    // обязательные точки (экзамен, босс, администрация) назначает админ —
+    // ни отменить, ни перенести их команда не может
     let updated = sqlx::query(
         "UPDATE bookings SET status = 'cancelled'
-         WHERE id = ? AND group_id = ? AND status = 'active'",
+         WHERE id = ? AND group_id = ? AND status = 'active' AND mandatory = 0",
     )
     .bind(id)
     .bind(group_id)
@@ -117,19 +133,34 @@ pub async fn cancel(
     .rows_affected();
 
     if updated == 0 {
-        return Err(ApiError::NotFound(
-            "активная бронь вашей команды с таким id не найдена".into(),
-        ));
+        // отличаем «нельзя» от «нет такой брони», иначе отказ выглядит багом
+        let mandatory: Option<i64> = sqlx::query_scalar(
+            "SELECT mandatory FROM bookings WHERE id = ? AND group_id = ? AND status = 'active'",
+        )
+        .bind(id)
+        .bind(group_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+        return Err(match mandatory {
+            Some(m) if m != 0 => {
+                ApiError::Forbidden("эту точку назначает администратор — отменить её нельзя".into())
+            }
+            _ => ApiError::NotFound("активная бронь вашей команды с таким id не найдена".into()),
+        });
     }
     Ok(Json(json!({ "ok": true })))
 }
 
 /// Все брони команды пользователя (история + активная).
-pub async fn my(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<BookingView>>> {
+pub async fn my(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<BookingView>>> {
     let group_id = user.group()?;
     let rows = sqlx::query_as::<_, BookingView>(
         "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at,
-                b.status, b.created_at
+                b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.group_id = ? ORDER BY s.starts_at",
     )
@@ -142,7 +173,7 @@ pub async fn my(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json
 pub async fn fetch_booking(state: &AppState, id: i64) -> ApiResult<BookingView> {
     sqlx::query_as::<_, BookingView>(
         "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at,
-                b.status, b.created_at
+                b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.id = ?",
     )
@@ -150,4 +181,31 @@ pub async fn fetch_booking(state: &AppState, id: i64) -> ApiResult<BookingView> 
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::NotFound("бронь не найдена".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn booking_opens_exactly_at_window_start() {
+        assert!(validate_booking_window(100, 100 + BOOKING_WINDOW, 2000).is_ok());
+    }
+
+    #[test]
+    fn booking_is_rejected_before_window() {
+        let result = validate_booking_window(99, 100 + BOOKING_WINDOW, 2000);
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn booking_is_allowed_during_slot() {
+        assert!(validate_booking_window(1000, 900, 1100).is_ok());
+    }
+
+    #[test]
+    fn booking_is_rejected_at_slot_end() {
+        let result = validate_booking_window(1100, 900, 1100);
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
 }

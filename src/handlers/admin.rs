@@ -1,9 +1,9 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{hash_password, AuthUser, ROLE_ADMIN};
+use crate::auth::{gen_code, hash_password, AuthUser, ROLE_ADMIN};
 use crate::error::{ApiError, ApiResult};
 use crate::models::*;
 use crate::state::AppState;
@@ -12,9 +12,90 @@ fn admin_only(user: &AuthUser) -> Result<(), ApiError> {
     user.require(&[ROLE_ADMIN])
 }
 
+fn required_text(value: String, field: &str) -> ApiResult<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        Err(ApiError::BadRequest(format!(
+            "поле «{field}» не может быть пустым"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
+fn validate_department(department: i64) -> ApiResult<()> {
+    if (1..=13).contains(&department) {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(
+            "номер кафедры должен быть от 1 до 13".into(),
+        ))
+    }
+}
+
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && matches!(&bytes[8..12], b"avif" | b"avis")
+    {
+        Some("avif")
+    } else {
+        None
+    }
+}
+
+/// Загружает одно растровое изображение карточки. Имя клиента не используется:
+/// случайное имя исключает обход каталогов и перезапись уже загруженных файлов.
+pub async fn upload_image(user: AuthUser, mut multipart: Multipart) -> ApiResult<Json<Value>> {
+    admin_only(&user)?;
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("не удалось прочитать файл: {e}")))?
+        .ok_or_else(|| ApiError::BadRequest("файл не передан".into()))?;
+    let bytes = field
+        .bytes()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("не удалось прочитать файл: {e}")))?;
+    if bytes.is_empty() {
+        return Err(ApiError::BadRequest("выбран пустой файл".into()));
+    }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(ApiError::BadRequest(
+            "изображение должно быть не больше 8 МБ".into(),
+        ));
+    }
+    let ext = image_extension(&bytes)
+        .ok_or_else(|| ApiError::BadRequest("поддерживаются PNG, JPEG, WebP, GIF и AVIF".into()))?;
+
+    let dir = std::path::Path::new("static/uploads");
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
+    tokio::fs::write(dir.join(&filename), &bytes)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(Json(json!({ "url": format!("/uploads/{filename}") })))
+}
+
 // ---------- users ----------
 
-pub async fn users(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<UserView>>> {
+pub async fn users(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<UserView>>> {
     admin_only(&user)?;
     let rows = sqlx::query_as::<_, UserView>(
         "SELECT u.id, u.login, u.display_name, u.role, u.group_id, g.name AS group_name,
@@ -47,31 +128,65 @@ pub async fn patch_user(
     admin_only(&user)?;
     let mut tx = state.db_w.begin().await?;
 
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if exists == 0 {
+        return Err(ApiError::NotFound("пользователь не найден".into()));
+    }
+
     if let Some(name) = body.display_name {
+        let name = required_text(name, "имя")?;
         sqlx::query("UPDATE users SET display_name = ? WHERE id = ?")
-            .bind(name).bind(id).execute(&mut *tx).await?;
+            .bind(name)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(password) = body.password {
+        if password.len() < 6 {
+            return Err(ApiError::BadRequest(
+                "пароль должен быть не короче 6 символов".into(),
+            ));
+        }
         let hash = tokio::task::spawn_blocking(move || hash_password(&password))
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))??;
         sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-            .bind(hash).bind(id).execute(&mut *tx).await?;
+            .bind(hash)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(role) = body.role {
         if !["admin", "leader", "student", "organizer"].contains(&role.as_str()) {
             return Err(ApiError::BadRequest("недопустимая роль".into()));
         }
+        if id == user.id && role != ROLE_ADMIN {
+            return Err(ApiError::BadRequest(
+                "нельзя снять роль администратора с текущего аккаунта".into(),
+            ));
+        }
         sqlx::query("UPDATE users SET role = ? WHERE id = ?")
-            .bind(role).bind(id).execute(&mut *tx).await?;
+            .bind(role)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(group_id) = body.group_id {
         sqlx::query("UPDATE users SET group_id = ? WHERE id = ?")
-            .bind(group_id).bind(id).execute(&mut *tx).await?;
+            .bind(group_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(point_id) = body.point_id {
         sqlx::query("UPDATE users SET point_id = ? WHERE id = ?")
-            .bind(point_id).bind(id).execute(&mut *tx).await?;
+            .bind(point_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
 
     tx.commit().await?;
@@ -112,8 +227,10 @@ pub async fn create_group(
     Json(body): Json<CreateGroupBody>,
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
+    let name = required_text(body.name, "название группы")?;
+    validate_department(body.department)?;
     let id = sqlx::query("INSERT INTO groups (name, department, created_at) VALUES (?, ?, ?)")
-        .bind(body.name.trim())
+        .bind(name)
         .bind(body.department)
         .bind(now_ts())
         .execute(&state.db_w)
@@ -137,17 +254,37 @@ pub async fn patch_group(
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
     let mut tx = state.db_w.begin().await?;
+
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM groups WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if exists == 0 {
+        return Err(ApiError::NotFound("группа не найдена".into()));
+    }
+
     if let Some(name) = body.name {
+        let name = required_text(name, "название группы")?;
         sqlx::query("UPDATE groups SET name = ? WHERE id = ?")
-            .bind(name.trim().to_string()).bind(id).execute(&mut *tx).await?;
+            .bind(name)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(dep) = body.department {
+        validate_department(dep)?;
         sqlx::query("UPDATE groups SET department = ? WHERE id = ?")
-            .bind(dep).bind(id).execute(&mut *tx).await?;
+            .bind(dep)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(character_id) = body.character_id {
         sqlx::query("UPDATE groups SET character_id = ? WHERE id = ?")
-            .bind(character_id).bind(id).execute(&mut *tx).await?;
+            .bind(character_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
@@ -176,13 +313,22 @@ pub async fn delete_group(
 pub struct CreatePointBody {
     pub name: String,
     pub description: Option<String>,
+    pub logo_url: Option<String>,
+    pub image_urls: Option<String>,
     pub location: Option<String>,
+    /// noc | activity | mandatory, по умолчанию noc
+    pub kind: Option<String>,
 }
 
-pub async fn all_points(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<Point>>> {
+/// Список для админа — с кодами организаторов (публичный `/api/points` их не отдаёт).
+pub async fn all_points(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<AdminPoint>>> {
     admin_only(&user)?;
-    let rows = sqlx::query_as::<_, Point>(
-        "SELECT id, name, description, location, is_active FROM points ORDER BY name",
+    let rows = sqlx::query_as::<_, AdminPoint>(
+        "SELECT id, name, description, logo_url, image_urls, location, kind, is_active, organizer_code
+         FROM points ORDER BY kind, name",
     )
     .fetch_all(&state.db)
     .await?;
@@ -195,21 +341,59 @@ pub async fn create_point(
     Json(body): Json<CreatePointBody>,
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
-    let id = sqlx::query("INSERT INTO points (name, description, location) VALUES (?, ?, ?)")
-        .bind(body.name.trim())
-        .bind(body.description.unwrap_or_default())
-        .bind(body.location.unwrap_or_default())
+    let name = required_text(body.name, "название точки")?;
+    let kind = body.kind.unwrap_or_else(|| KIND_NOC.to_string());
+    if !is_valid_kind(&kind) {
+        return Err(ApiError::BadRequest("недопустимый тип точки".into()));
+    }
+    let code = gen_code();
+    let id = sqlx::query(
+        "INSERT INTO points
+         (name, description, logo_url, image_urls, location, kind, organizer_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(name)
+    .bind(body.description.unwrap_or_default())
+    .bind(body.logo_url.unwrap_or_default())
+    .bind(body.image_urls.unwrap_or_default())
+    .bind(body.location.unwrap_or_default())
+    .bind(&kind)
+    .bind(&code)
+    .execute(&state.db_w)
+    .await?
+    .last_insert_rowid();
+    Ok(Json(json!({ "id": id, "organizer_code": code })))
+}
+
+/// Перегенерировать код точки — если старый утёк.
+/// Уже зарегистрированные организаторы своей привязки не теряют.
+pub async fn regenerate_code(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    admin_only(&user)?;
+    let code = gen_code();
+    let updated = sqlx::query("UPDATE points SET organizer_code = ? WHERE id = ?")
+        .bind(&code)
+        .bind(id)
         .execute(&state.db_w)
         .await?
-        .last_insert_rowid();
-    Ok(Json(json!({ "id": id })))
+        .rows_affected();
+    if updated == 0 {
+        return Err(ApiError::NotFound("точка не найдена".into()));
+    }
+    Ok(Json(json!({ "organizer_code": code })))
 }
 
 #[derive(Deserialize)]
 pub struct PatchPointBody {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub logo_url: Option<String>,
+    pub image_urls: Option<String>,
     pub location: Option<String>,
+    pub kind: Option<String>,
     pub is_active: Option<bool>,
 }
 
@@ -221,21 +405,67 @@ pub async fn patch_point(
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
     let mut tx = state.db_w.begin().await?;
+
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM points WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if exists == 0 {
+        return Err(ApiError::NotFound("точка не найдена".into()));
+    }
+
     if let Some(name) = body.name {
+        let name = required_text(name, "название точки")?;
         sqlx::query("UPDATE points SET name = ? WHERE id = ?")
-            .bind(name).bind(id).execute(&mut *tx).await?;
+            .bind(name)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(description) = body.description {
         sqlx::query("UPDATE points SET description = ? WHERE id = ?")
-            .bind(description).bind(id).execute(&mut *tx).await?;
+            .bind(description)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(logo_url) = body.logo_url {
+        sqlx::query("UPDATE points SET logo_url = ? WHERE id = ?")
+            .bind(logo_url.trim())
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(image_urls) = body.image_urls {
+        sqlx::query("UPDATE points SET image_urls = ? WHERE id = ?")
+            .bind(image_urls.trim())
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(location) = body.location {
         sqlx::query("UPDATE points SET location = ? WHERE id = ?")
-            .bind(location).bind(id).execute(&mut *tx).await?;
+            .bind(location)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(kind) = body.kind {
+        if !is_valid_kind(&kind) {
+            return Err(ApiError::BadRequest("недопустимый тип точки".into()));
+        }
+        sqlx::query("UPDATE points SET kind = ? WHERE id = ?")
+            .bind(kind)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(is_active) = body.is_active {
         sqlx::query("UPDATE points SET is_active = ? WHERE id = ?")
-            .bind(is_active).bind(id).execute(&mut *tx).await?;
+            .bind(is_active)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
@@ -278,25 +508,48 @@ pub async fn generate_slots(
     Json(body): Json<GenerateSlotsBody>,
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
-    if body.slot_minutes <= 0 || !(1..=200).contains(&body.count) {
-        return Err(ApiError::BadRequest("некорректные параметры генерации".into()));
+    let break_minutes = body.break_minutes.unwrap_or(0);
+    let capacity = body.capacity.unwrap_or(1);
+    if body.slot_minutes <= 0
+        || break_minutes < 0
+        || capacity <= 0
+        || !(1..=200).contains(&body.count)
+    {
+        return Err(ApiError::BadRequest(
+            "некорректные параметры генерации".into(),
+        ));
     }
     let start = chrono::DateTime::parse_from_rfc3339(&body.first_start)
         .map_err(|e| ApiError::BadRequest(format!("first_start: неверный формат даты ({e})")))?
         .timestamp();
-    let step = (body.slot_minutes + body.break_minutes.unwrap_or(0)) * 60;
-    let capacity = body.capacity.unwrap_or(1).max(1);
+    let slot_seconds = body
+        .slot_minutes
+        .checked_mul(60)
+        .ok_or_else(|| ApiError::BadRequest("слишком большая длительность слота".into()))?;
+    let step = body
+        .slot_minutes
+        .checked_add(break_minutes)
+        .and_then(|minutes| minutes.checked_mul(60))
+        .ok_or_else(|| ApiError::BadRequest("слишком большой интервал слотов".into()))?;
 
     let mut tx = state.db_w.begin().await?;
     let mut ids = Vec::new();
     for i in 0..body.count {
-        let s = start + i * step;
+        let s = i
+            .checked_mul(step)
+            .and_then(|offset| start.checked_add(offset))
+            .ok_or_else(|| {
+                ApiError::BadRequest("дата слота выходит за допустимый диапазон".into())
+            })?;
+        let ends_at = s.checked_add(slot_seconds).ok_or_else(|| {
+            ApiError::BadRequest("дата слота выходит за допустимый диапазон".into())
+        })?;
         let id = sqlx::query(
             "INSERT INTO slots (point_id, starts_at, ends_at, capacity) VALUES (?, ?, ?, ?)",
         )
         .bind(body.point_id)
         .bind(s)
-        .bind(s + body.slot_minutes * 60)
+        .bind(ends_at)
         .bind(capacity)
         .execute(&mut *tx)
         .await?
@@ -313,12 +566,11 @@ pub async fn delete_slot(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
-    let active: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM bookings WHERE slot_id = ? AND status = 'active'",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let active: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM bookings WHERE slot_id = ? AND status = 'active'")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
     if active > 0 {
         return Err(ApiError::Conflict(
             "на слот есть активная бронь — сначала отмените её".into(),
@@ -349,10 +601,12 @@ pub async fn bookings(State(state): State<AppState>, user: AuthUser) -> ApiResul
         ends_at: i64,
         status: String,
         created_at: i64,
+        /// назначенная админом бронь на обязательную точку
+        mandatory: bool,
     }
     let rows = sqlx::query_as::<_, AdminBooking>(
         "SELECT b.id, b.group_id, g.name AS group_name, p.name AS point_name,
-                s.starts_at, s.ends_at, b.status, b.created_at
+                s.starts_at, s.ends_at, b.status, b.created_at, b.mandatory
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN groups g ON g.id = b.group_id
@@ -361,7 +615,9 @@ pub async fn bookings(State(state): State<AppState>, user: AuthUser) -> ApiResul
     )
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?))
+    Ok(Json(
+        serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -381,7 +637,8 @@ pub async fn create_booking(
     let mut tx = state.db_w.begin().await?;
 
     let slot: Option<Slot> = sqlx::query_as(
-        "SELECT id, point_id, starts_at, ends_at, capacity FROM slots WHERE id = ?",
+        "SELECT s.id, s.point_id, s.starts_at, s.ends_at, s.capacity, p.kind
+         FROM slots s JOIN points p ON p.id = s.point_id WHERE s.id = ?",
     )
     .bind(body.slot_id)
     .fetch_optional(&mut *tx)
@@ -397,18 +654,27 @@ pub async fn create_booking(
         return Err(ApiError::Conflict("слот уже занят".into()));
     }
 
-    // активную бронь группы, если есть, отменяем — админ знает, что делает
-    sqlx::query("UPDATE bookings SET status = 'cancelled' WHERE group_id = ? AND status = 'active'")
+    let mandatory = slot.kind == KIND_MANDATORY;
+
+    // Обычная бронь вытесняет предыдущую — админ знает, что делает.
+    // Обязательная идёт параллельно и текущую бронь команды не трогает.
+    if !mandatory {
+        sqlx::query(
+            "UPDATE bookings SET status = 'cancelled'
+             WHERE group_id = ? AND status = 'active' AND mandatory = 0",
+        )
         .bind(body.group_id)
         .execute(&mut *tx)
         .await?;
+    }
 
     let id = sqlx::query(
-        "INSERT INTO bookings (slot_id, group_id, status, created_at, created_by)
-         VALUES (?, ?, 'active', ?, ?)",
+        "INSERT INTO bookings (slot_id, group_id, status, mandatory, created_at, created_by)
+         VALUES (?, ?, 'active', ?, ?, ?)",
     )
     .bind(slot.id)
     .bind(body.group_id)
+    .bind(mandatory)
     .bind(now_ts())
     .bind(user.id)
     .execute(&mut *tx)
@@ -462,7 +728,7 @@ pub async fn scores(
     admin_only(&user)?;
     let rows = sqlx::query_as::<_, ScoreView>(
         "SELECT se.id, se.group_id, g.name AS group_name, se.point_id, p.name AS point_name,
-                u.display_name AS organizer_name, se.points, se.comment, se.created_at
+                u.display_name AS organizer_name, se.kind, se.points, se.comment, se.created_at
          FROM score_entries se
          JOIN groups g ON g.id = se.group_id
          JOIN points p ON p.id = se.point_id
@@ -492,8 +758,9 @@ pub async fn create_score(
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
     let id = sqlx::query(
-        "INSERT INTO score_entries (group_id, point_id, organizer_id, points, comment, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO score_entries
+            (group_id, point_id, organizer_id, kind, points, comment, created_at)
+         VALUES (?, ?, ?, 'manual', ?, ?, ?)",
     )
     .bind(body.group_id)
     .bind(body.point_id)
@@ -538,8 +805,9 @@ pub async fn create_character(
     Json(body): Json<CreateCharacterBody>,
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
+    let name = required_text(body.name, "имя персонажа")?;
     let id = sqlx::query("INSERT INTO characters (name, description) VALUES (?, ?)")
-        .bind(body.name.trim())
+        .bind(name)
         .bind(body.description.unwrap_or_default())
         .execute(&state.db_w)
         .await?
@@ -562,4 +830,24 @@ pub async fn delete_character(
         return Err(ApiError::NotFound("персонаж не найден".into()));
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::image_extension;
+
+    #[test]
+    fn detects_supported_image_signatures() {
+        assert_eq!(image_extension(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+        assert_eq!(image_extension(b"\xff\xd8\xffrest"), Some("jpg"));
+        assert_eq!(image_extension(b"GIF89arest"), Some("gif"));
+        assert_eq!(image_extension(b"RIFF1234WEBPrest"), Some("webp"));
+        assert_eq!(image_extension(b"1234ftypavifrest"), Some("avif"));
+    }
+
+    #[test]
+    fn rejects_non_images_and_svg() {
+        assert_eq!(image_extension(b"plain text"), None);
+        assert_eq!(image_extension(b"<svg><script/></svg>"), None);
+    }
 }
