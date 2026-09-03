@@ -6,12 +6,14 @@ export function adBanner(banner, variant = 'wide') {
   if (!banner) return '';
 
   const className = `ad-banner ad-banner--${variant}${banner.href ? ' is-link' : ''}${
-    banner.image ? '' : ' no-image'}`;
+    banner.image || banner.mark ? '' : ' no-image'}${
+    banner.partnerId ? ` ad-banner--partner-${esc(banner.partnerId)}` : ''}`;
   const content = `
     ${banner.image ? `
       <span class="ad-banner__visual">
         <img src="${esc(banner.image)}" alt="${esc(banner.imageAlt || '')}" loading="lazy">
-      </span>` : ''}
+      </span>` : banner.mark ? `
+      <span class="ad-banner__visual ad-banner__visual--mark" aria-hidden="true">${esc(banner.mark)}</span>` : ''}
     <span class="ad-banner__body">
       <span class="ad-banner__label">${esc(banner.label || 'Реклама')}</span>
       <strong class="ad-banner__title">${esc(banner.title)}</strong>
@@ -27,4 +29,19 @@ export function adBanner(banner, variant = 'wide') {
   }
 
   return `<aside class="${className}" aria-label="${esc(banner.label || 'Реклама')}">${content}</aside>`;
+}
+
+/** Реклама в меню игрока: использует тот же список и порядок, что витрина. */
+export function partnerBanner(partner, variant = 'compact') {
+  return adBanner({
+    label: 'Партнёр мероприятия',
+    title: partner.name,
+    text: partner.text || 'Подробнее о партнёре — на его сайте.',
+    image: partner.image,
+    imageAlt: partner.name,
+    mark: partner.mark,
+    partnerId: partner.id,
+    href: partner.href,
+    action: 'Подробнее',
+  }, variant);
 }

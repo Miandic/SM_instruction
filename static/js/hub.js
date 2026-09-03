@@ -4,9 +4,9 @@
      организации (точки типа noc) → активности → обязательные точки.
    Клик по лучу открывает укороченную карточку с расписанием. */
 
-import { AD_BANNERS, HERO_IMAGE, PLACEHOLDER_LOGO } from '../content.js';
+import { HERO_IMAGE, PARTNERS, PLACEHOLDER_LOGO } from '../content.js';
 import { $, api, ask, esc, state, flash, fmtT, fmtDT, bindActions } from './core.js';
-import { adBanner } from './banner.js';
+import { partnerBanner } from './banner.js';
 import { openSheet, sheetBar, isSheetOpen } from './sheet.js';
 import { bookingCtx, slotChips } from './slots.js';
 import { startFloat } from './float.js';
@@ -27,6 +27,10 @@ let hubHost = null;
 let menuIndex = 0;
 let currentItem = null;
 let tableTimer = null;
+let partnerBannerTimer = null;
+let partnerBannerFadeTimer = null;
+let partnerBannerIndex = 0;
+let carouselRaf = null;
 /** Данные последней загрузки: переключение меню по ним же, без новых запросов. */
 let data = {
   points: [], ctx: bookingCtx([]), bookings: [], preview: false,
@@ -84,6 +88,7 @@ const itemOfPoint = pointId =>
 // ---------- радиальное меню ----------
 
 export async function renderHub(host, options = {}) {
+  stopHub();
   hubHost = host;
   const preview = options.preview === true;
   let groups = [];
@@ -112,12 +117,15 @@ export async function renderHub(host, options = {}) {
   };
 
   paint();
+  startPartnerBanner(host);
 }
 
 /** Перерисовка колеса по уже загруженным данным — стрелки ходят без запросов. */
-function paint() {
+function paint(revealBranches = false) {
   const host = hubHost;
   if (!host?.isConnected) return;
+  cancelAnimationFrame(carouselRaf);
+  carouselRaf = null;
 
   const all = menus(data.points);
   menuIndex = ((menuIndex % all.length) + all.length) % all.length;
@@ -147,7 +155,7 @@ function paint() {
         </div>
       </div>
 
-      ${wheelHtml(menu.items, stateOf)}
+      ${carouselHtml(all, stateOf, revealBranches)}
       ${menu.items.length ? '' : `<p class="note note--empty">${esc(menu.empty)}</p>`}
 
       <div class="hub__links">
@@ -158,7 +166,7 @@ function paint() {
         ${arrow('next', 'Следующее меню', 'm9 18 6-6-6-6')}
       </div>
 
-      ${adBanner(AD_BANNERS.hub, 'compact')}
+      <div data-partner-banner>${partnerBanner(PARTNERS[partnerBannerIndex])}</div>
 
       ${ctx.active ? `
         <div class="notice">
@@ -203,8 +211,156 @@ function paint() {
     next: () => { menuIndex++; paint(); },
   });
 
-  // колесо ожило: элементы слегка дрейфуют и тянутся к курсору
-  startFloat(host.querySelector('.wheel'));
+  bindMenuSwipe(host.querySelector('[data-carousel]'));
+
+  // Центры карусели неподвижны относительно своих страниц, дрейфуют только ветви.
+  startFloat(host.querySelector('.wheel--current'), { floatCore: false });
+}
+
+/**
+ * Листает три раздела жестом по карусели. Соседние колёса уже существуют за
+ * краями кадра, поэтому появляются синхронно с движением пальца, а не после
+ * перерисовки. Не отменяем события движения: вертикальная прокрутка сохраняется.
+ */
+function bindMenuSwipe(carousel) {
+  if (!carousel) return;
+  let start = null;
+  let ignoreClick = false;
+  let pull = 0;
+  let settling = false;
+  const minDistance = Math.min(120, Math.max(48, carousel.clientWidth * .22));
+  const setPull = value => {
+    pull = value;
+    carousel.style.setProperty('--carousel-x', `${value.toFixed(1)}px`);
+    if (!settling) {
+      // Растворение следует за пальцем в пределах 50 px от центра.
+      const progress = Math.min(1, Math.abs(value) / 50);
+      const opacity = 1 - progress * progress * (3 - 2 * progress);
+      carousel.style.setProperty('--branches-opacity', String(opacity));
+    }
+  };
+  const settle = (target, done = () => {}) => {
+    if (Math.abs(pull - target) < .5) {
+      setPull(target);
+      carousel.classList.remove('is-swiping');
+      done();
+      return;
+    }
+    settling = true;
+    animateCarousel(carousel, pull, target, value => setPull(value), () => {
+      settling = false;
+      if (target === 0) carousel.classList.remove('is-swiping');
+      done();
+    });
+  };
+
+  carousel.addEventListener('pointerdown', event => {
+    if (settling || event.pointerType !== 'touch' || !event.isPrimary) return;
+    start = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  }, { passive: true });
+
+  carousel.addEventListener('pointermove', event => {
+    if (settling || !start || event.pointerId !== start.id) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (!carousel.classList.contains('is-swiping') &&
+        (Math.abs(dx) < 8 || Math.abs(dx) <= Math.abs(dy) * 1.1)) return;
+    // Захват после начала жеста сохраняет обычные тапы по кнопкам.
+    carousel.setPointerCapture(event.pointerId);
+
+    // Меню следует за пальцем почти один к одному; ограничение не даёт
+    // перетянуть его дальше соседней страницы.
+    const maxPull = carousel.clientWidth * .88;
+    carousel.classList.add('is-swiping');
+    setPull(Math.max(-maxPull, Math.min(maxPull, dx)));
+  }, { passive: true });
+
+  carousel.addEventListener('pointerup', event => {
+    if (!start || event.pointerId !== start.id) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    start = null;
+
+    // Диагональный/вертикальный жест отдаём прокрутке, а не смене раздела.
+    if (Math.abs(dx) < minDistance || Math.abs(dx) <= Math.abs(dy) * 1.25) {
+      settle(0);
+      return;
+    }
+
+    ignoreClick = true;
+    const direction = dx < 0 ? 1 : -1;
+    // После остановки центра проявляем ветви нового меню.
+    settle(-direction * carousel.clientWidth, () => {
+      menuIndex += direction;
+      paint(true);
+    });
+    // После pointerup браузер может прислать click; не открываем случайную карточку.
+    setTimeout(() => { ignoreClick = false; }, 0);
+  }, { passive: true });
+
+  carousel.addEventListener('pointercancel', () => { start = null; settle(0); }, { passive: true });
+  carousel.addEventListener('click', event => {
+    if (!ignoreClick) return;
+    ignoreClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+}
+
+/** Мягко доводит центральный шарик до выбранной страницы. */
+function animateCarousel(carousel, from, to, onFrame, done) {
+  cancelAnimationFrame(carouselRaf);
+  const startedAt = performance.now();
+  const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 360;
+  const frame = now => {
+    if (!carousel.isConnected) return;
+    const progress = Math.min(1, (now - startedAt) / duration);
+    // Быстрый выход: карусель не зависает между меню, а финал остаётся мягким.
+    const eased = 1 - (1 - progress) ** 3;
+    onFrame(from + (to - from) * eased);
+    if (progress < 1) {
+      carouselRaf = requestAnimationFrame(frame);
+    } else {
+      carouselRaf = null;
+      done();
+    }
+  };
+  carouselRaf = requestAnimationFrame(frame);
+}
+
+/** Одна плашка на партнёра: порядок берётся из PARTNERS, смена — каждые 8 секунд. */
+function startPartnerBanner(host) {
+  if (PARTNERS.length < 2) return;
+
+  partnerBannerIndex %= PARTNERS.length;
+  partnerBannerTimer = setInterval(() => {
+    const bannerHost = host.querySelector('[data-partner-banner]');
+    if (!host.isConnected || !bannerHost) {
+      stopHub();
+      return;
+    }
+    partnerBannerIndex = (partnerBannerIndex + 1) % PARTNERS.length;
+    bannerHost.classList.add('is-changing');
+    partnerBannerFadeTimer = setTimeout(() => {
+      if (!bannerHost.isConnected) {
+        partnerBannerFadeTimer = null;
+        return;
+      }
+      bannerHost.innerHTML = partnerBanner(PARTNERS[partnerBannerIndex]);
+      requestAnimationFrame(() => bannerHost.classList.remove('is-changing'));
+      partnerBannerFadeTimer = null;
+    }, 180);
+  }, 8000);
+}
+
+/** Останавливает фоновые действия главной при уходе на другой экран. */
+export function stopHub() {
+  if (partnerBannerTimer) clearInterval(partnerBannerTimer);
+  if (partnerBannerFadeTimer) clearTimeout(partnerBannerFadeTimer);
+  partnerBannerTimer = null;
+  partnerBannerFadeTimer = null;
+  cancelAnimationFrame(carouselRaf);
+  carouselRaf = null;
 }
 
 function previewBar() {
@@ -230,7 +386,27 @@ const arrow = (act, label, path) => `
          stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>
   </button>`;
 
-function wheelHtml(items, stateOf) {
+function carouselHtml(all, stateOf, revealBranches) {
+  const previous = all[(menuIndex + all.length - 1) % all.length];
+  const current = all[menuIndex];
+  const next = all[(menuIndex + 1) % all.length];
+  const page = (menu, className, currentPage) => `
+    <div class="hub__carousel-page" ${currentPage ? '' : 'aria-hidden="true"'}>
+      ${wheelHtml(menu.items, stateOf, className, currentPage)}
+    </div>`;
+
+  return `
+    <div class="hub__carousel${revealBranches ? ' is-revealing' : ''}" data-carousel>
+      <div class="hub__carousel-track">
+        ${page(previous, 'wheel--previous', false)}
+        ${page(current, 'wheel--current', true)}
+        ${page(next, 'wheel--next', false)}
+      </div>
+    </div>`;
+}
+
+function wheelHtml(items, stateOf, className = '', interactive = true) {
+  const disabled = interactive ? '' : 'disabled tabindex="-1"';
   const step = 360 / Math.max(items.length, 1);
   const angle = i => ((-90 + i * step) * Math.PI) / 180;
 
@@ -249,6 +425,7 @@ function wheelHtml(items, stateOf) {
       <button class="node ${st ? 'node--' + st : ''}"
               style="--x:${f(50 + RING * Math.cos(a))};--y:${f(50 + RING * Math.sin(a))}"
               data-act="open" data-id="${esc(o.id)}"
+              ${disabled}
               aria-label="${esc(o.name)}${st ? ' — ' + STATE_LABELS[st] : ''}">
         <span class="node__logo"><img src="${esc(o.logo)}" alt="" loading="lazy"></span>
         <span class="node__name">${esc(o.name)}</span>
@@ -256,13 +433,16 @@ function wheelHtml(items, stateOf) {
   }).join('');
 
   return `
-    <div class="wheel">
+    <div class="wheel ${className}">
+      <div class="wheel__branches">
       <svg class="wheel__rays" viewBox="0 0 100 100" aria-hidden="true">
         <circle class="wheel__ring" cx="50" cy="50" r="${RING}"/>
         <g class="wheel__lines">${rays}</g>
       </svg>
+      ${nodes}
+      </div>
 
-      <button class="core" data-act="hero">
+      <button class="core" data-act="hero" ${disabled}>
         <!-- ЗАМЕНИТЬ НА ИЗОБРАЖЕНИЕ ПЕРСОНАЖА (content.js → HERO_IMAGE) -->
         <span class="core__art ${HERO_IMAGE === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
           <img src="${esc(HERO_IMAGE)}" alt="">
@@ -270,7 +450,6 @@ function wheelHtml(items, stateOf) {
         <span class="core__label">Персонаж</span>
       </button>
 
-      ${nodes}
     </div>`;
 }
 

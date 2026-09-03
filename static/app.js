@@ -15,7 +15,7 @@ import {
 } from './js/core.js';
 import { initSheet, closeSheet } from './js/sheet.js';
 import { renderLanding, openOrg } from './js/landing.js';
-import { renderHub, openItemSheet } from './js/hub.js';
+import { renderHub, openItemSheet, stopHub } from './js/hub.js';
 import { renderHero } from './js/hero.js';
 import { renderAuth } from './js/auth.js';
 import { renderCabinet, stopCabinet } from './js/cabinet.js';
@@ -48,6 +48,7 @@ async function logout() {
   try { await api('/auth/logout', 'POST', {}); } catch { /* не критично */ }
   clearSession();
   stopCabinet();
+  stopHub();
   currentView = null;
   location.hash = '#/';
   renderTopbar();
@@ -78,6 +79,7 @@ async function route() {
 
     const groupId = Number(parts[1]) || null;
     if (head === 'preview-hero') {
+      stopHub();
       closeSheet();
       await show('preview-hero', host => renderHero(host, { preview: true, groupId }), true);
       return;
@@ -96,6 +98,7 @@ async function route() {
     stopCabinet();
 
     if (head === 'hero') {
+      stopHub();
       closeSheet();
       await show('hero', renderHero, true);
       return;
@@ -110,6 +113,7 @@ async function route() {
   if (head === 'app') {
     if (!state.me) { location.replace('#/auth'); return; }
     closeSheet();
+    stopHub();
     await show('cabinet', host => renderCabinet(host, parts[1]), true);
     return;
   }
@@ -118,11 +122,13 @@ async function route() {
     if (state.me) { location.replace(homeRoute()); return; }
     closeSheet();
     stopCabinet();
+    stopHub();
     await show('auth', renderAuth);
     return;
   }
 
   stopCabinet();
+  stopHub();
   await show('landing', renderLanding);
   if (head === 'org' && parts[1]) openOrg(parts[1]);
   else closeSheet();

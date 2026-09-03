@@ -30,7 +30,7 @@ const onMove = e => {
 const onLeave = () => { mouse.inside = false; };
 const onLayout = () => { needMeasure = true; };
 
-export function startFloat(wheelEl) {
+export function startFloat(wheelEl, { floatCore = true } = {}) {
   stopFloat();
   if (!wheelEl) return;
   // уважаем системную настройку: анимации могут быть выключены намеренно
@@ -57,9 +57,10 @@ export function startFloat(wheelEl) {
 
   items = [...wheel.querySelectorAll('.node')].map((el, i) => make(el, lines[i] ?? null, 1));
 
-  const core = wheel.querySelector('.core');
-  // центр — якорь композиции, ему хватает половины размаха
-  if (core) items.push(make(core, null, 0.5));
+  // В карусели центр должен совпадать с центром входящей страницы без скачка.
+  if (floatCore) {
+    for (const core of wheel.querySelectorAll('.core')) items.push(make(core, null, 0.5));
+  }
 
   needMeasure = true;
   addEventListener('pointermove', onMove, { passive: true });
