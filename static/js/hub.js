@@ -509,8 +509,6 @@ export async function openItemSheet(id) {
 
         <article class="paper">
           ${o.desc ? `<p>${esc(o.desc)}</p>` : ''}
-          ${(o.about?.length || o.images?.length)
-            ? `<a class="link" href="#/org/${esc(o.id)}">Подробнее об организации</a>` : ''}
           <div class="booking" id="booking"><p class="note">Загружаем расписание…</p></div>
         </article>
       </div>
