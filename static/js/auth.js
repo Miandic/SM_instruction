@@ -53,12 +53,12 @@ function registerBody(f) {
     login: f.login.trim(),
     password: f.password,
     role: f.role,
+    code: f.code.trim(),
   };
 
   if (f.role === 'organizer') {
     // Точку определяет код; отдельного поля имени в форме пока нет — берём логин.
     body.display_name = body.login;
-    body.code = f.code;
   } else {
     body.display_name = `${f.first_name.trim()} ${f.last_name.trim()}`.trim();
     body.group_name = f.group_name;
@@ -158,8 +158,8 @@ function registerForm() {
 
   const code = `
     <label class="field">
-      <span>Код организатора</span>
-      <input name="code" autocomplete="off" required>
+      <span>${isOrganizer ? 'Код организатора' : 'Код регистрации'}</span>
+      <input name="code" autocomplete="off" ${isOrganizer ? 'required' : ''}>
     </label>`;
 
   return `
@@ -167,7 +167,7 @@ function registerForm() {
       ${roles}
       ${isOrganizer ? '' : group}
       ${credentials}
-      ${isOrganizer ? code : fio}
+      ${isOrganizer ? code : `${fio}${code}`}
       <button class="btn btn--primary btn--lg btn--block">Создать аккаунт</button>
     </form>`;
 }

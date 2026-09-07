@@ -100,6 +100,10 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn registration_code_matches(required: Option<&str>, provided: Option<&str>) -> bool {
+    required.is_none_or(|required| provided.map(str::trim) == Some(required))
+}
+
 async fn create_session(state: &AppState, user_id: i64) -> ApiResult<String> {
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let now = now_ts();
@@ -165,10 +169,11 @@ pub async fn register(
 
     let (group_id, point_id): (Option<i64>, Option<i64>) = match body.role.as_str() {
         ROLE_LEADER | ROLE_STUDENT => {
-            if let Some(required) = &state.cfg.registration_code {
-                if body.code.as_deref() != Some(required.as_str()) {
-                    return Err(ApiError::Forbidden("неверный регистрационный код".into()));
-                }
+            if !registration_code_matches(
+                state.cfg.registration_code.as_deref(),
+                body.code.as_deref(),
+            ) {
+                return Err(ApiError::Forbidden("неверный регистрационный код".into()));
             }
             let name = body
                 .group_name
@@ -300,4 +305,29 @@ pub async fn logout(
 
 pub async fn me(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Value>> {
     Ok(Json(me_json(&state, user.id).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::registration_code_matches;
+
+    #[test]
+    fn registration_code_is_checked_and_trimmed_when_required() {
+        assert!(registration_code_matches(
+            Some("TEAM-2026"),
+            Some("TEAM-2026")
+        ));
+        assert!(registration_code_matches(
+            Some("TEAM-2026"),
+            Some("  TEAM-2026  ")
+        ));
+        assert!(!registration_code_matches(Some("TEAM-2026"), None));
+        assert!(!registration_code_matches(Some("TEAM-2026"), Some("wrong")));
+    }
+
+    #[test]
+    fn registration_code_is_optional_when_not_configured() {
+        assert!(registration_code_matches(None, None));
+        assert!(registration_code_matches(None, Some("anything")));
+    }
 }

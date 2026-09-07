@@ -37,6 +37,7 @@ async fn main() {
         cfg: Arc::new(Config {
             registration_code: std::env::var("REGISTRATION_CODE")
                 .ok()
+                .map(|code| code.trim().to_string())
                 .filter(|s| !s.is_empty()),
         }),
     };
