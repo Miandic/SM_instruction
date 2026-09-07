@@ -522,13 +522,15 @@ select {
 }
 .partner-icon--mafia-vip .partner-icon__image,
 .partner-card--mafia-vip .partner-card__image {
-  --partner-backdrop-width: 90%;
+  --partner-backdrop-width: 104%;
   --partner-backdrop-ratio: 2124 / 2457;
 }
 .partner-icon--timati-karting .partner-icon__image,
 .partner-card--timati-karting .partner-card__image {
   --partner-backdrop-width: 104%;
-  --partner-backdrop-ratio: 1;
+  /* В PNG большой прозрачный отступ сверху и снизу; подложка берёт
+     пропорции только видимого двухстрочного знака. */
+  --partner-backdrop-ratio: 937 / 415;
 }
 .partner-icon--kuulklever .partner-icon__image img,
 .partner-card--kuulklever .partner-card__image img,
