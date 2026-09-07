@@ -1,0 +1,6 @@
+name
+Modano
+text
+
+link
+http://www.modano.ru

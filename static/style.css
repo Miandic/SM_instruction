@@ -171,16 +171,20 @@ main { padding-bottom: 56px; }
 .topbar { padding-block: 22px 8px; }
 .topbar__inner { display: grid; gap: 10px; justify-items: center; }
 
-/* Текстовая заглушка логотипа. Когда придёт вектор — заменить содержимое
-   на <img>, размеры задать здесь же. */
 .brand {
-  font-weight: 700;
-  font-size: clamp(25px, 7vw, 38px);
-  line-height: 1.12;
-  letter-spacing: -.005em;
-  text-align: center;
-  color: var(--ink);
-  text-wrap: balance;
+  display: block;
+  width: 90vw;
+  line-height: 0;
+}
+.brand img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+@media (min-width: 621px) {
+  .brand { width: min(100%, 520px); }
 }
 
 .usermenu {
@@ -406,6 +410,14 @@ select {
 .org__head > .org__logo img[src="/img/organizations/mkc.png"],
 .org__head > .org__logo img[src="img/organizations/mkc.png"] {
   transform: translate(2.44%, -.38%);
+}
+
+/* Монохромные чёрные знаки читаются лучше белыми на фиолетовой подложке. */
+.org__logo img[src="/img/organizations/cmr.png"],
+.org__logo img[src="/img/organizations/obshaga.png"],
+.org__logo img[src="/img/organizations/potok.png"],
+.org__logo img[src="/img/organizations/profsoyuz.png"] {
+  filter: invert(1);
 }
 
 .org__logo--lg { width: 96px; height: 96px; }

@@ -28,8 +28,9 @@ function renderTopbar() {
   const me = state.me;
   $('#topbar').innerHTML = `
     <div class="wrap topbar__inner">
-      <!-- ЗАМЕНИТЬ НА ЛОГОТИП: сюда встанет <img> с вектором вместо текста -->
-      <a class="brand" href="${me ? homeRoute() : '#/'}">${esc(EVENT.title)}</a>
+      <a class="brand" href="${me ? homeRoute() : '#/'}">
+        <img src="/img/SmSurvivalLogo.svg" alt="${esc(EVENT.title)}">
+      </a>
       ${me ? `
         <div class="usermenu">
           <span class="usermenu__info">${esc(me.display_name)} · ${
