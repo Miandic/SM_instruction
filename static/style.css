@@ -412,11 +412,15 @@ select {
   transform: translate(2.44%, -.38%);
 }
 
-/* Монохромные чёрные знаки читаются лучше белыми на фиолетовой подложке. */
-.org__logo img[src="/img/organizations/cmr.png"],
-.org__logo img[src="/img/organizations/obshaga.png"],
-.org__logo img[src="/img/organizations/potok.png"],
-.org__logo img[src="/img/organizations/profsoyuz.png"] {
+/* Эти монохромные знаки всегда отображаются белыми — во всех экранах сайта. */
+img[src="/img/organizations/cmr.png"],
+img[src="img/organizations/cmr.png"],
+img[src="/img/organizations/obshaga.png"],
+img[src="img/organizations/obshaga.png"],
+img[src="/img/organizations/potok.png"],
+img[src="img/organizations/potok.png"],
+img[src="/img/organizations/profsoyuz.png"],
+img[src="img/organizations/profsoyuz.png"] {
   filter: invert(1);
 }
 

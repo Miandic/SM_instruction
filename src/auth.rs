@@ -100,10 +100,6 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn registration_code_matches(required: Option<&str>, provided: Option<&str>) -> bool {
-    required.is_none_or(|required| provided.map(str::trim) == Some(required))
-}
-
 async fn create_session(state: &AppState, user_id: i64) -> ApiResult<String> {
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let now = now_ts();
@@ -143,7 +139,7 @@ pub struct RegisterBody {
     pub role: String,
     /// для старосты/студента: название группы, например "СМ1-11"
     pub group_name: Option<String>,
-    /// для организатора — код его точки; для команды — общий код, если задан
+    /// код точки для организатора; для старосты/студента не используется
     pub code: Option<String>,
 }
 
@@ -169,12 +165,6 @@ pub async fn register(
 
     let (group_id, point_id): (Option<i64>, Option<i64>) = match body.role.as_str() {
         ROLE_LEADER | ROLE_STUDENT => {
-            if !registration_code_matches(
-                state.cfg.registration_code.as_deref(),
-                body.code.as_deref(),
-            ) {
-                return Err(ApiError::Forbidden("неверный регистрационный код".into()));
-            }
             let name = body
                 .group_name
                 .as_deref()
@@ -309,25 +299,74 @@ pub async fn me(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json
 
 #[cfg(test)]
 mod tests {
-    use super::registration_code_matches;
+    use axum::{extract::State, Json};
 
-    #[test]
-    fn registration_code_is_checked_and_trimmed_when_required() {
-        assert!(registration_code_matches(
-            Some("TEAM-2026"),
-            Some("TEAM-2026")
-        ));
-        assert!(registration_code_matches(
-            Some("TEAM-2026"),
-            Some("  TEAM-2026  ")
-        ));
-        assert!(!registration_code_matches(Some("TEAM-2026"), None));
-        assert!(!registration_code_matches(Some("TEAM-2026"), Some("wrong")));
-    }
+    use super::{register, RegisterBody, ROLE_LEADER, ROLE_ORGANIZER, ROLE_STUDENT};
+    use crate::{error::ApiError, state::AppState};
 
-    #[test]
-    fn registration_code_is_optional_when_not_configured() {
-        assert!(registration_code_matches(None, None));
-        assert!(registration_code_matches(None, Some("anything")));
+    #[tokio::test]
+    async fn only_organizers_need_a_registration_code() {
+        let path = std::env::temp_dir().join(format!(
+            "sm-instruction-registration-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let (db, db_w) = crate::db::init(&path_text).await.unwrap();
+        let state = AppState { db, db_w };
+
+        for (login, role) in [("leader-test", ROLE_LEADER), ("student-test", ROLE_STUDENT)] {
+            let _ = register(
+                State(state.clone()),
+                Json(RegisterBody {
+                    login: login.into(),
+                    password: "secret1".into(),
+                    display_name: login.into(),
+                    role: role.into(),
+                    group_name: Some("СМ1-11".into()),
+                    code: None,
+                }),
+            )
+            .await
+            .unwrap();
+        }
+
+        let missing_code = register(
+            State(state.clone()),
+            Json(RegisterBody {
+                login: "organizer-test".into(),
+                password: "secret1".into(),
+                display_name: "organizer-test".into(),
+                role: ROLE_ORGANIZER.into(),
+                group_name: None,
+                code: None,
+            }),
+        )
+        .await;
+        assert!(matches!(missing_code, Err(ApiError::BadRequest(_))));
+
+        let organizer_code: String =
+            sqlx::query_scalar("SELECT organizer_code FROM points LIMIT 1")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterBody {
+                login: "organizer-test".into(),
+                password: "secret1".into(),
+                display_name: "organizer-test".into(),
+                role: ROLE_ORGANIZER.into(),
+                group_name: None,
+                code: Some(organizer_code),
+            }),
+        )
+        .await
+        .unwrap();
+
+        state.db.close().await;
+        state.db_w.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
+        }
     }
 }

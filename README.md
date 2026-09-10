@@ -12,7 +12,7 @@ Rust (axum + SQLx) + SQLite. Фронтенд — статика из `static/`,
 ## Запуск
 
 ```powershell
-Copy-Item .env.example .env  # задать сильный ADMIN_PASSWORD и коды регистрации
+Copy-Item .env.example .env  # задать сильный ADMIN_PASSWORD
 cargo run                    # http://localhost:8080
 ```
 

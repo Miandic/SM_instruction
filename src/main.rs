@@ -5,8 +5,6 @@ mod handlers;
 mod models;
 mod state;
 
-use std::sync::Arc;
-
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue};
 use axum::routing::{delete, get, patch, post};
@@ -16,7 +14,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers::{admin, booking, organizer, public};
-use crate::state::{AppState, Config};
+use crate::state::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -31,16 +29,7 @@ async fn main() {
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "data.db".into());
     let (db, db_w) = db::init(&db_path).await.expect("db init failed");
 
-    let state = AppState {
-        db,
-        db_w,
-        cfg: Arc::new(Config {
-            registration_code: std::env::var("REGISTRATION_CODE")
-                .ok()
-                .map(|code| code.trim().to_string())
-                .filter(|s| !s.is_empty()),
-        }),
-    };
+    let state = AppState { db, db_w };
 
     let api = Router::new()
         // без авторизации
