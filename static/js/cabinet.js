@@ -18,6 +18,7 @@ function tabsFor(me) {
   if (me.group_id) tabs.push(['team', 'Моя команда']);
   tabs.push(['rating', 'Рейтинг']);
   if (me.role === 'organizer') tabs.push(['org', 'Моя точка']);
+  if (me.role === 'admin') tabs.push(['progression', 'Прокачка']);
   if (me.role === 'admin') tabs.push(['admin', 'Админка']);
   return tabs;
 }
@@ -54,6 +55,15 @@ async function renderTab() {
   const host = $('#tabview');
   if (!host) return;
   host.innerHTML = await RENDERERS[current]();
+  bindScoreSliders(host);
+}
+
+function bindScoreSliders(host) {
+  host.querySelectorAll('[data-score-slider]').forEach(input => {
+    const output = document.getElementById(input.dataset.scoreOutput);
+    if (!output) return;
+    input.addEventListener('input', () => { output.value = input.value; });
+  });
 }
 
 const reload = () => renderTab();
@@ -159,6 +169,7 @@ RENDERERS.team = async () => {
         <span class="status status--${b.status}">${STATUS_LABELS[b.status]}</span>
       </div>
       <div class="item__meta">${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}${
+        b.location ? ` · ${esc(b.location)}` : ''}${
         b.mandatory ? ' · назначено организаторами' : ''}</div>
       ${b.status === 'active' && state.me.role === 'leader' && !b.mandatory
         ? `<div class="item__actions">
@@ -232,14 +243,15 @@ RENDERERS.org = async () => {
     api('/organizer/bookings'),
   ]);
 
-  // сколько оценок ставит организатор — зависит от типа точки
-  const needTest = point.kind === 'noc';
+  // У НОЦ и активностей единая оценка за задание; обязательные точки — без баллов.
   const needTask = point.kind !== 'mandatory';
 
-  const numField = (id, label) => `
+  const scoreSlider = id => `
     <label class="scorefield">
-      <span>${label}</span>
-      <input type="number" id="${id}" value="10" min="0" max="1000" aria-label="${label}">
+      <span class="scorefield__head">За задание <output id="${id}-value" for="${id}">10</output></span>
+      <input type="range" id="${id}" value="10" min="0" max="10" step="1"
+             aria-label="Баллы за задание" aria-describedby="${id}-value"
+             data-score-slider data-score-output="${id}-value">
     </label>`;
 
   const done = b => [
@@ -253,15 +265,15 @@ RENDERERS.org = async () => {
         <b>${esc(b.group_name)}</b>
         <span class="status status--${b.status}">${STATUS_LABELS[b.status]}</span>
       </div>
-      <div class="item__meta">${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}</div>
+      <div class="item__meta">${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}${
+        b.location ? ` · ${esc(b.location)}` : ''}</div>
       ${b.status === 'active' ? `
         <div class="inline-form">
-          ${needTest ? numField(`test-${b.id}`, 'За тест') : ''}
-          ${needTask ? numField(`task-${b.id}`, 'За точку') : ''}
+          ${needTask ? scoreSlider(`task-${b.id}`) : ''}
           <input id="cmt-${b.id}" placeholder="Комментарий" aria-label="Комментарий">
           <button class="btn btn--primary" data-act="complete" data-id="${b.id}"
-                  data-test="${needTest}" data-task="${needTask}">
-            ${needTest || needTask ? 'Завершить' : 'Отметить'}
+                  data-task="${needTask}">
+            ${needTask ? 'Завершить' : 'Отметить'}
           </button>
         </div>`
         : `<div class="item__meta"><span class="points">${done(b)}</span></div>`}
@@ -275,14 +287,65 @@ RENDERERS.org = async () => {
         <button class="btn btn--sm" data-act="refresh">Обновить</button>
       </div>
       <p class="note">${KIND_LABELS[point.kind] || esc(point.kind)}${
-        point.kind === 'noc' ? ' — две оценки: за тест и за прохождение.'
-          : point.kind === 'activity' ? ' — одна оценка за прохождение.'
+        point.kind === 'noc' ? ' — одна оценка за задание.'
+          : point.kind === 'activity' ? ' — одна оценка за задание.'
             : ' — баллы не начисляются, только отметка о посещении.'}</p>
       ${list}
     </div>`;
 };
 
 // ---------- админка ----------
+
+const progressionHeaders = [
+  'Персонаж', 'Всего очков', 'Нераспределённые очки',
+  'Мужество', 'Воля', 'Труд', 'Упорство', 'Время последнего обновления',
+];
+
+const tsvCell = value => String(value ?? '').replace(/[\t\r\n]+/g, ' ');
+const progressionCharacter = row => `${row.group_id}. ${row.character_name ?? '—'}`;
+
+function progressionTsv(rows) {
+  return [progressionHeaders, ...rows.map(row => [
+    progressionCharacter(row), row.total_points, row.available_points,
+    row.courage, row.will, row.labor, row.persistence,
+    row.updated_at ? fmtDT(row.updated_at) : '—',
+  ])].map(row => row.map(tsvCell).join('\t')).join('\n');
+}
+
+RENDERERS.progression = async () => {
+  const rows = await api('/admin/progression');
+  const copyText = progressionTsv(rows);
+
+  return `
+    <div class="stack">
+      <article class="card">
+        ${sectionHead('Прокачка групп')}
+        <p class="note">Таблица показывает актуальные значения. Последнее обновление — последнее начисление баллов или повышение характеристики.</p>
+        ${rows.length ? `<div class="tablewrap"><table class="progression-table">
+          <tr>${progressionHeaders.map(header => `<th>${header}</th>`).join('')}</tr>
+          ${rows.map(row => `<tr>
+            <td>${esc(progressionCharacter(row))}</td>
+            <td>${row.total_points}</td>
+            <td>${row.available_points}</td>
+            <td>${row.courage}</td>
+            <td>${row.will}</td>
+            <td>${row.labor}</td>
+            <td>${row.persistence}</td>
+            <td class="nowrap">${row.updated_at ? fmtDT(row.updated_at) : '—'}</td>
+          </tr>`).join('')}
+        </table></div>` : empty('Групп пока нет.')}
+      </article>
+      <article class="card progression-copy">
+        <div class="card__head">
+          <h3>Копируемый список</h3>
+          <button class="btn btn--primary" data-act="copy-progression">Копировать</button>
+        </div>
+        <textarea id="progression-copy" rows="${Math.min(12, Math.max(3, rows.length + 1))}" readonly
+                  aria-label="Прокачка групп в формате для копирования">${esc(copyText)}</textarea>
+        <p class="note">Столбцы разделены табуляцией: при вставке в таблицу они попадут в отдельные ячейки.</p>
+      </article>
+    </div>`;
+};
 
 RENDERERS.admin = async () => {
   const [points, groups, users, bookings, scores, characters, slots, rating] = await Promise.all([
@@ -485,7 +548,7 @@ RENDERERS.admin = async () => {
           <tr><th>Время</th><th>Команда</th><th>Точка</th><th>Статус</th><th></th></tr>
           ${bookings.map(b => `
             <tr>
-              <td class="nowrap">${fmtDT(b.starts_at)}</td>
+              <td class="nowrap">${fmtDT(b.starts_at)}${b.location ? `<br>${esc(b.location)}` : ''}</td>
               <td>${esc(b.group_name)}</td>
               <td class="nowrap">${esc(b.point_name)}${
                 b.mandatory ? ' <span class="badge">назначена</span>' : ''}</td>
@@ -567,6 +630,19 @@ async function cancelBooking({ id }) {
 const ACTIONS = {
   refresh: () => reload(),
 
+  'copy-progression': async () => {
+    const field = $('#progression-copy');
+    if (!field) return;
+    field.focus();
+    field.select();
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(field.value);
+    } else if (!document.execCommand('copy')) {
+      throw new Error('не удалось скопировать список');
+    }
+    flash('Список скопирован');
+  },
+
   book: async ({ id }) => {
     await api('/bookings', 'POST', { slot_id: Number(id) });
     flash('Слот забронирован');
@@ -583,9 +659,8 @@ const ACTIONS = {
   // блок слота со своей бронью шлёт `cancel` — разметку рисует общий slots.js
   cancel: cancelBooking,
 
-  complete: async ({ id, test, task }) => {
+  complete: async ({ id, task }) => {
     const body = { booking_id: Number(id), comment: $('#cmt-' + id).value };
-    if (test === 'true') body.test_points = Number($('#test-' + id).value);
     if (task === 'true') body.task_points = Number($('#task-' + id).value);
     const d = await api('/organizer/complete', 'POST', body);
     flash(d.points ? `Визит завершён, начислено ${d.points} баллов` : 'Визит отмечен');

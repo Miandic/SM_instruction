@@ -110,6 +110,38 @@ pub async fn users(
     Ok(Json(rows))
 }
 
+// ---------- progression ----------
+
+/// Текущая прокачка всех команд в форме, удобной для админской сводки.
+pub async fn progression(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<AdminProgressRow>>> {
+    admin_only(&user)?;
+    let rows = sqlx::query_as::<_, AdminProgressRow>(
+        "SELECT g.id AS group_id, c.name AS character_name,
+                COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0) AS total_points,
+                MAX(0,
+                  COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0)
+                    - COALESCE((SELECT SUM(gs.spent) FROM group_stats gs WHERE gs.group_id = g.id), 0)
+                ) AS available_points,
+                COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'courage'), 0) AS courage,
+                COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'will'), 0) AS will,
+                COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'labor'), 0) AS labor,
+                COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'persistence'), 0) AS persistence,
+                MAX(
+                  COALESCE((SELECT MAX(se.created_at) FROM score_entries se WHERE se.group_id = g.id), 0),
+                  COALESCE((SELECT MAX(gs.updated_at) FROM group_stats gs WHERE gs.group_id = g.id), 0)
+                ) AS updated_at
+         FROM groups g
+         LEFT JOIN characters c ON c.id = g.character_id
+         ORDER BY total_points DESC, g.name",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
 #[derive(Deserialize)]
 pub struct PatchUserBody {
     pub display_name: Option<String>,
@@ -610,6 +642,7 @@ pub async fn bookings(State(state): State<AppState>, user: AuthUser) -> ApiResul
         point_name: String,
         starts_at: i64,
         ends_at: i64,
+        location: String,
         status: String,
         created_at: i64,
         /// назначенная админом бронь на обязательную точку
@@ -617,7 +650,7 @@ pub async fn bookings(State(state): State<AppState>, user: AuthUser) -> ApiResul
     }
     let rows = sqlx::query_as::<_, AdminBooking>(
         "SELECT b.id, b.group_id, g.name AS group_name, p.name AS point_name,
-                s.starts_at, s.ends_at, b.status, b.created_at, b.mandatory
+                s.starts_at, s.ends_at, b.location, b.status, b.created_at, b.mandatory
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN groups g ON g.id = b.group_id
@@ -845,7 +878,13 @@ pub async fn delete_character(
 
 #[cfg(test)]
 mod tests {
-    use super::{image_extension, PatchUserBody};
+    use axum::{extract::State, Json};
+
+    use super::{image_extension, progression, PatchUserBody};
+    use crate::{
+        auth::{AuthUser, ROLE_ADMIN},
+        state::AppState,
+    };
 
     #[test]
     fn detects_supported_image_signatures() {
@@ -877,5 +916,84 @@ mod tests {
             serde_json::from_str(r#"{"group_id":7,"point_id":9}"#).unwrap();
         assert_eq!(assigned.group_id, Some(Some(7)));
         assert_eq!(assigned.point_id, Some(Some(9)));
+    }
+
+    #[tokio::test]
+    async fn progression_returns_current_stats_balance_and_latest_update() {
+        let path = std::env::temp_dir().join(format!(
+            "sm-instruction-progression-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let (db, db_w) = crate::db::init(&path_text).await.unwrap();
+        let state = AppState {
+            db: db.clone(),
+            db_w: db_w.clone(),
+        };
+
+        let group_id: i64 = sqlx::query_scalar("SELECT id FROM groups ORDER BY id LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let character_id: i64 = sqlx::query_scalar("SELECT id FROM characters ORDER BY id LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let point_id: i64 = sqlx::query_scalar("SELECT id FROM points ORDER BY id LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE groups SET character_id = ? WHERE id = ?")
+            .bind(character_id)
+            .bind(group_id)
+            .execute(&db_w)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO score_entries (group_id, point_id, kind, points, comment, created_at)
+             VALUES (?, ?, 'manual', 9, '', 120)",
+        )
+        .bind(group_id)
+        .bind(point_id)
+        .execute(&db_w)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO group_stats (group_id, stat, value, spent, updated_at)
+             VALUES (?, 'courage', 2, 2, 180), (?, 'labor', 1, 1, 160)",
+        )
+        .bind(group_id)
+        .bind(group_id)
+        .execute(&db_w)
+        .await
+        .unwrap();
+
+        let Json(rows) = progression(
+            State(state),
+            AuthUser {
+                id: 1,
+                role: ROLE_ADMIN.into(),
+                group_id: None,
+                point_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.group_id, group_id);
+        assert_eq!(row.total_points, 9);
+        assert_eq!(row.available_points, 6);
+        assert_eq!(
+            (row.courage, row.will, row.labor, row.persistence),
+            (2, 0, 1, 0)
+        );
+        assert_eq!(row.updated_at, 180);
+        assert!(row.character_name.is_some());
+
+        db.close().await;
+        db_w.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
+        }
     }
 }

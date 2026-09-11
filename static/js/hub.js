@@ -467,7 +467,7 @@ function fixedHtml(fixed) {
     .map(b => `
       <div class="fixed__row">
         <b>${esc(b.point_name)}</b>
-        <span>${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}</span>
+        <span>${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}${b.location ? ` · ${esc(b.location)}` : ''}</span>
       </div>`).join('');
 
   return `

@@ -17,7 +17,7 @@ export const fmtDT = ts => new Date(ts * 1000)
 export const ROLE_LABELS = { admin: 'Админ', leader: 'Староста', student: 'Студент', organizer: 'Организатор' };
 export const STATUS_LABELS = { active: 'активна', completed: 'пройдена', cancelled: 'отменена' };
 
-/** Типы точек. noc — две оценки, activity — одна, mandatory — без баллов. */
+/** Типы точек. noc и activity — одна оценка за задание, mandatory — без баллов. */
 export const KIND_LABELS = { noc: 'НОЦ', activity: 'Активность', mandatory: 'Обязательная' };
 export const SCORE_KIND_LABELS = { test: 'тест', task: 'прохождение', manual: 'вручную' };
 

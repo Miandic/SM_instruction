@@ -137,7 +137,7 @@ pub async fn group_detail(
     .await?;
 
     let bookings = sqlx::query_as::<_, BookingView>(
-        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at,
+        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at, b.location,
                 b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.group_id = ? ORDER BY s.starts_at",
@@ -227,14 +227,15 @@ pub async fn upgrade_stat(
     }
 
     let value: i64 = sqlx::query_scalar(
-        "INSERT INTO group_stats (group_id, stat, value, spent) VALUES (?, ?, 1, ?)
+        "INSERT INTO group_stats (group_id, stat, value, spent, updated_at) VALUES (?, ?, 1, ?, ?)
          ON CONFLICT(group_id, stat) DO UPDATE
-            SET value = value + 1, spent = spent + excluded.spent
+            SET value = value + 1, spent = spent + excluded.spent, updated_at = excluded.updated_at
          RETURNING value",
     )
     .bind(group_id)
     .bind(&body.stat)
     .bind(UPGRADE_COST)
+    .bind(now_ts())
     .fetch_one(&mut *tx)
     .await?;
 

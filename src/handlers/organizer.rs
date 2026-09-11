@@ -16,10 +16,10 @@ pub async fn bookings(
     user.require(&[ROLE_ORGANIZER])?;
     let point_id = user.point()?;
 
-    // подзапросами, а не JOIN: у точки НОЦ на бронь приходится две оценки,
-    // и JOIN размножил бы строки
+    // Исторические записи за тест сохраняем в выдаче отдельно: они могли быть
+    // начислены до перехода НОЦ на единую оценку за задание.
     let rows = sqlx::query_as::<_, OrganizerBooking>(
-        "SELECT b.id, b.group_id, g.name AS group_name, b.status, s.starts_at, s.ends_at,
+        "SELECT b.id, b.group_id, g.name AS group_name, b.status, s.starts_at, s.ends_at, b.location,
                 b.created_at,
                 (SELECT points FROM score_entries se
                   WHERE se.booking_id = b.id AND se.kind = 'test') AS test_points,
@@ -40,21 +40,42 @@ pub async fn bookings(
 #[derive(Deserialize)]
 pub struct CompleteBody {
     pub booking_id: i64,
-    /// баллы за тест — обязательны для точек НОЦ и запрещены для остальных
+    /// Поле оставлено только для явного отклонения старых клиентов.
     pub test_points: Option<i64>,
-    /// баллы за прохождение — обязательны для НОЦ и активностей
+    /// Баллы за задание — обязательны для НОЦ и активностей.
     pub task_points: Option<i64>,
     pub comment: Option<String>,
 }
 
-fn check_range(value: i64, what: &str) -> Result<(), ApiError> {
-    if (0..=1000).contains(&value) {
+fn check_range(value: i64) -> Result<(), ApiError> {
+    if (0..=10).contains(&value) {
         Ok(())
     } else {
-        Err(ApiError::BadRequest(format!(
-            "{what}: баллы должны быть в диапазоне 0–1000"
-        )))
+        Err(ApiError::BadRequest(
+            "баллы за задание должны быть в диапазоне 0–10".into(),
+        ))
     }
+}
+
+fn validate_scores(kind: &str, body: &CompleteBody) -> Result<(), ApiError> {
+    if body.test_points.is_some() {
+        return Err(ApiError::BadRequest(
+            "оценка за тест больше не используется".into(),
+        ));
+    }
+
+    let need_task = matches!(kind, KIND_NOC | KIND_ACTIVITY);
+    if need_task != body.task_points.is_some() {
+        return Err(ApiError::BadRequest(if need_task {
+            "укажите баллы за задание".into()
+        } else {
+            "за обязательную точку баллы не начисляются".into()
+        }));
+    }
+    if let Some(points) = body.task_points {
+        check_range(points)?;
+    }
+    Ok(())
 }
 
 /// Завершить визит команды и начислить баллы по правилам типа точки.
@@ -72,33 +93,7 @@ pub async fn complete(
         .await?
         .ok_or_else(|| ApiError::NotFound("точка не найдена".into()))?;
 
-    // какие оценки положены этому типу точки
-    let (need_test, need_task) = match kind.as_str() {
-        KIND_NOC => (true, true),
-        KIND_ACTIVITY => (false, true),
-        _ => (false, false), // обязательная точка — только отметка о посещении
-    };
-
-    if need_test != body.test_points.is_some() {
-        return Err(ApiError::BadRequest(if need_test {
-            "укажите баллы за тест".into()
-        } else {
-            "у этой точки нет теста".into()
-        }));
-    }
-    if need_task != body.task_points.is_some() {
-        return Err(ApiError::BadRequest(if need_task {
-            "укажите баллы за прохождение".into()
-        } else {
-            "за обязательную точку баллы не начисляются".into()
-        }));
-    }
-    if let Some(p) = body.test_points {
-        check_range(p, "тест")?;
-    }
-    if let Some(p) = body.task_points {
-        check_range(p, "прохождение")?;
-    }
+    validate_scores(&kind, &body)?;
 
     let mut tx = state.db_w.begin().await?;
 
@@ -132,8 +127,7 @@ pub async fn complete(
     let now = now_ts();
     let mut total = 0;
 
-    for (entry_kind, points) in [("test", body.test_points), ("task", body.task_points)] {
-        let Some(points) = points else { continue };
+    if let Some(points) = body.task_points {
         sqlx::query(
             "INSERT INTO score_entries
                 (group_id, point_id, organizer_id, booking_id, kind, points, comment, created_at)
@@ -143,17 +137,49 @@ pub async fn complete(
         .bind(point_id)
         .bind(user.id)
         .bind(body.booking_id)
-        .bind(entry_kind)
+        .bind("task")
         .bind(points)
         .bind(&comment)
         .bind(now)
         .execute(&mut *tx)
         .await?;
-        total += points;
+        total = points;
     }
 
     tx.commit().await?;
     Ok(Json(
         json!({ "ok": true, "group_id": group_id, "points": total }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_range, validate_scores, CompleteBody};
+    use crate::models::{KIND_ACTIVITY, KIND_MANDATORY, KIND_NOC};
+
+    fn body(test_points: Option<i64>, task_points: Option<i64>) -> CompleteBody {
+        CompleteBody {
+            booking_id: 1,
+            test_points,
+            task_points,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn noc_and_activity_require_one_task_score() {
+        assert!(validate_scores(KIND_NOC, &body(None, Some(10))).is_ok());
+        assert!(validate_scores(KIND_ACTIVITY, &body(None, Some(0))).is_ok());
+        assert!(validate_scores(KIND_NOC, &body(None, None)).is_err());
+        assert!(validate_scores(KIND_MANDATORY, &body(None, None)).is_ok());
+    }
+
+    #[test]
+    fn test_score_is_rejected_and_task_is_limited_to_ten() {
+        assert!(validate_scores(KIND_NOC, &body(Some(1), Some(10))).is_err());
+        assert!(check_range(0).is_ok());
+        assert!(check_range(10).is_ok());
+        assert!(check_range(-1).is_err());
+        assert!(check_range(11).is_err());
+    }
 }

@@ -39,7 +39,15 @@ async fn migrate(db: &SqlitePool) -> Result<(), sqlx::Error> {
     add_column(db, "points", "logo_url", "TEXT NOT NULL DEFAULT ''").await?;
     add_column(db, "points", "image_urls", "TEXT NOT NULL DEFAULT ''").await?;
     add_column(db, "bookings", "mandatory", "INTEGER NOT NULL DEFAULT 0").await?;
+    add_column(db, "bookings", "location", "TEXT NOT NULL DEFAULT ''").await?;
     add_column(db, "score_entries", "kind", "TEXT NOT NULL DEFAULT 'task'").await?;
+    add_column(
+        db,
+        "group_stats",
+        "updated_at",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
 
     // С 12.09.2026 прокачка работает строго 1:1. Нормализуем списания,
     // сделанные по прежней цене-заглушке, чтобы свободный баланс тоже был верным.
@@ -310,6 +318,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(card, ("Описание".into(), String::new(), String::new()));
+        let booking_location: String = sqlx::query_scalar(
+            "SELECT location FROM pragma_table_info('bookings') WHERE name = 'location'",
+        )
+        .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(booking_location, "location");
 
         db.close().await;
         db_w.close().await;

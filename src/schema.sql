@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS groups (
     created_at   INTEGER NOT NULL
 );
 
--- kind: noc — точка НОЦ (две оценки: тест и прохождение)
+-- kind: noc — точка НОЦ (одна оценка за задание)
 --       activity — доп. активность (одна оценка за прохождение)
 --       mandatory — обязательная точка (без баллов, записывает админ)
 CREATE TABLE IF NOT EXISTS points (
@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS bookings (
     slot_id    INTEGER NOT NULL REFERENCES slots(id) ON DELETE CASCADE,
     group_id   INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     status     TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
+    -- аудитория обязательного назначения может отличаться у групп в одном слоте
+    location   TEXT NOT NULL DEFAULT '',
     -- бронь на обязательную точку: назначается заранее и не занимает
     -- единственный слот команды (иначе она не смогла бы записаться никуда ещё)
     mandatory  INTEGER NOT NULL DEFAULT 0,
@@ -79,7 +81,7 @@ CREATE TABLE IF NOT EXISTS bookings (
 
 CREATE INDEX IF NOT EXISTS bookings_by_slot ON bookings(slot_id);
 
--- kind: test — за тест (только точки НОЦ), task — за прохождение точки,
+-- kind: test — историческая оценка за тест, task — за задание,
 --       manual — ручное начисление админом
 CREATE TABLE IF NOT EXISTS score_entries (
     id           INTEGER PRIMARY KEY,
@@ -103,5 +105,7 @@ CREATE TABLE IF NOT EXISTS group_stats (
     value    INTEGER NOT NULL DEFAULT 0,
     -- сколько баллов списано; при правиле 1:1 равно value
     spent    INTEGER NOT NULL DEFAULT 0,
+    -- момент последнего повышения этой характеристики
+    updated_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (group_id, stat)
 );

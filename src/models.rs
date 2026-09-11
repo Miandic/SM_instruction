@@ -93,6 +93,21 @@ pub struct RatingRow {
     pub level: i64,
 }
 
+/// Сводка прокачки для администратора. Значения характеристик всегда
+/// присутствуют, а `updated_at` отражает последнее изменение баллов или статов.
+#[derive(Serialize, FromRow)]
+pub struct AdminProgressRow {
+    pub group_id: i64,
+    pub character_name: Option<String>,
+    pub total_points: i64,
+    pub available_points: i64,
+    pub courage: i64,
+    pub will: i64,
+    pub labor: i64,
+    pub persistence: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Serialize, FromRow)]
 pub struct BookingView {
     pub id: i64,
@@ -101,6 +116,8 @@ pub struct BookingView {
     pub point_name: String,
     pub starts_at: i64,
     pub ends_at: i64,
+    /// аудитория, назначенная именно этой группе
+    pub location: String,
     pub status: String,
     pub created_at: i64,
     /// бронь на обязательную точку: назначена админом, команда её не трогает
@@ -144,8 +161,9 @@ pub struct OrganizerBooking {
     pub status: String,
     pub starts_at: i64,
     pub ends_at: i64,
+    pub location: String,
     pub created_at: i64,
-    /// баллы за тест — только у точек НОЦ
+    /// Исторические баллы за тест, выставленные до перехода НОЦ на одну оценку
     pub test_points: Option<i64>,
     /// баллы за прохождение точки
     pub task_points: Option<i64>,

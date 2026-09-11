@@ -57,6 +57,7 @@ async fn main() {
         .route("/organizer/complete", post(organizer::complete))
         // админ
         .route("/admin/users", get(admin::users))
+        .route("/admin/progression", get(admin::progression))
         .route(
             "/admin/users/{id}",
             patch(admin::patch_user).delete(admin::delete_user),
