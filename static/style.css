@@ -487,6 +487,8 @@ img[src="img/organizations/profsoyuz.png"] {
 .partner-icon__image {
   width: 58px;
   aspect-ratio: 1;
+  /* Центрируем весь блок логотипа в свободной строке плитки при любой высоте. */
+  align-self: center;
 }
 .partner-icon__image img, .partner-card__image img { width: 100%; height: 100%; object-fit: contain; }
 
@@ -570,12 +572,18 @@ img[src="img/organizations/profsoyuz.png"] {
    карточках партнёров, не меняя размеры сетки и подписей. */
 .partner-icon--kuulklever .partner-icon__image,
 .partner-card--kuulklever .partner-card__image,
+.partner-icon--kuki-luki .partner-icon__image,
+.partner-card--kuki-luki .partner-card__image,
 .partner-icon--ballers-street .partner-icon__image,
 .partner-card--ballers-street .partner-card__image,
 .partner-icon--debosh .partner-icon__image,
 .partner-card--debosh .partner-card__image,
 .partner-icon--modano .partner-icon__image,
 .partner-card--modano .partner-card__image { transform: scale(1.25); }
+
+/* У знака «Куки Луки» много свободного поля в SVG. */
+.partner-icon--kuki-luki .partner-icon__image,
+.partner-card--kuki-luki .partner-card__image { transform: scale(1.45); }
 
 /* В исходниках «Тайрай» вокруг знака почти 2/3 прозрачного поля, а у
    «Мосигры» — широкие поля по бокам. Масштабируем изображение внутри того же

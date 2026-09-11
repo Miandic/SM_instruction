@@ -101,8 +101,7 @@ CREATE TABLE IF NOT EXISTS group_stats (
     group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     stat     TEXT NOT NULL,
     value    INTEGER NOT NULL DEFAULT 0,
-    -- сколько баллов уже списано на эту характеристику: цена уровня может
-    -- поменяться, а потраченное должно остаться потраченным
+    -- сколько баллов списано; при правиле 1:1 равно value
     spent    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (group_id, stat)
 );

@@ -41,6 +41,12 @@ async fn migrate(db: &SqlitePool) -> Result<(), sqlx::Error> {
     add_column(db, "bookings", "mandatory", "INTEGER NOT NULL DEFAULT 0").await?;
     add_column(db, "score_entries", "kind", "TEXT NOT NULL DEFAULT 'task'").await?;
 
+    // С 12.09.2026 прокачка работает строго 1:1. Нормализуем списания,
+    // сделанные по прежней цене-заглушке, чтобы свободный баланс тоже был верным.
+    sqlx::query("UPDATE group_stats SET spent = value WHERE spent <> value")
+        .execute(db)
+        .await?;
+
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS points_organizer_code
          ON points(organizer_code) WHERE organizer_code IS NOT NULL",
@@ -221,6 +227,45 @@ async fn seed(db: &SqlitePool) -> Result<(), sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn normalizes_legacy_upgrade_spending_to_one_to_one() {
+        let path = std::env::temp_dir().join(format!(
+            "sm-instruction-upgrade-migration-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let (db, db_w) = init(&path_text).await.unwrap();
+        let group_id: i64 = sqlx::query_scalar("SELECT id FROM groups ORDER BY id LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO group_stats (group_id, stat, value, spent)
+             VALUES (?, 'courage', 3, 30)",
+        )
+        .bind(group_id)
+        .execute(&db_w)
+        .await
+        .unwrap();
+
+        migrate(&db_w).await.unwrap();
+
+        let spent: i64 = sqlx::query_scalar(
+            "SELECT spent FROM group_stats WHERE group_id = ? AND stat = 'courage'",
+        )
+        .bind(group_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(spent, 3);
+
+        db.close().await;
+        db_w.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
+        }
+    }
 
     #[tokio::test]
     async fn migrates_legacy_points_with_card_media_fields() {

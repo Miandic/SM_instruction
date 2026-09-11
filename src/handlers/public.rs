@@ -284,3 +284,86 @@ pub async fn pick_character(
     }
     Ok(Json(json!({ "ok": true })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::ROLE_LEADER;
+
+    #[tokio::test]
+    async fn upgrade_spends_one_earned_point_for_one_stat_level() {
+        let path = std::env::temp_dir().join(format!(
+            "sm-instruction-upgrade-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let (db, db_w) = crate::db::init(&path_text).await.unwrap();
+        let state = AppState {
+            db: db.clone(),
+            db_w: db_w.clone(),
+        };
+
+        let group_id: i64 = sqlx::query_scalar("SELECT id FROM groups ORDER BY id LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let point_id: i64 = sqlx::query_scalar("SELECT id FROM points ORDER BY id LIMIT 1")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO score_entries
+                (group_id, point_id, kind, points, comment, created_at)
+             VALUES (?, ?, 'manual', 1, '', ?)",
+        )
+        .bind(group_id)
+        .bind(point_id)
+        .bind(crate::models::now_ts())
+        .execute(&db_w)
+        .await
+        .unwrap();
+
+        let user = AuthUser {
+            id: 1,
+            role: ROLE_LEADER.into(),
+            group_id: Some(group_id),
+            point_id: None,
+        };
+        let Json(result) = upgrade_stat(
+            State(state.clone()),
+            user.clone(),
+            Json(UpgradeBody {
+                stat: "courage".into(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["value"], 1);
+        assert_eq!(result["available"], 0);
+        let row: (i64, i64) = sqlx::query_as(
+            "SELECT value, spent FROM group_stats WHERE group_id = ? AND stat = 'courage'",
+        )
+        .bind(group_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(row, (1, 1));
+
+        let second = upgrade_stat(
+            State(state),
+            user,
+            Json(UpgradeBody {
+                stat: "will".into(),
+            }),
+        )
+        .await;
+        assert!(matches!(second, Err(ApiError::Conflict(_))));
+
+        db.close().await;
+        db_w.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
+        }
+    }
+}
