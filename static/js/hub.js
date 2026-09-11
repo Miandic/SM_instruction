@@ -5,7 +5,7 @@
    Клик по лучу открывает укороченную карточку с расписанием. */
 
 import { HERO_IMAGE, PARTNERS, PLACEHOLDER_LOGO } from '../content.js';
-import { $, api, ask, esc, state, flash, fmtT, fmtDT, bindActions } from './core.js';
+import { $, api, ask, esc, state, flash, fmtT, fmtDT, bindActions, isPartnerDemo } from './core.js';
 import { partnerBanner } from './banner.js';
 import { openSheet, sheetBar, isSheetOpen } from './sheet.js';
 import { bookingCtx, slotChips } from './slots.js';
@@ -160,8 +160,9 @@ function paint(revealBranches = false) {
 
       <div class="hub__links">
         ${arrow('prev', 'Предыдущее меню', 'M15 18 9 12l6-6')}
-        <a class="btn btn--sm" href="${data.preview
-          ? '#/preview-hero/' + data.groupId : '#/app/team'}">${data.preview ? 'Персонаж' : 'Моя команда'}</a>
+        ${data.preview
+          ? `<a class="btn btn--sm" href="#/preview-hero/${data.groupId}">Персонаж</a>`
+          : isPartnerDemo(state.me) ? '' : '<a class="btn btn--sm" href="#/app/team">Моя команда</a>'}
         <a class="btn btn--sm" href="#/app/rating">Рейтинг</a>
         ${arrow('next', 'Следующее меню', 'm9 18 6-6-6-6')}
       </div>
@@ -432,6 +433,8 @@ function wheelHtml(items, stateOf, className = '', interactive = true) {
       </button>`;
   }).join('');
 
+  const partnerDemo = !data.preview && isPartnerDemo(state.me);
+
   return `
     <div class="wheel ${className}">
       <div class="wheel__branches">
@@ -442,12 +445,13 @@ function wheelHtml(items, stateOf, className = '', interactive = true) {
       ${nodes}
       </div>
 
-      <button class="core" data-act="hero" ${disabled}>
+      <button class="core ${partnerDemo ? 'core--static' : ''}" data-act="hero"
+              ${partnerDemo ? 'disabled aria-label="Партнёрский демо-режим"' : disabled}>
         <!-- ЗАМЕНИТЬ НА ИЗОБРАЖЕНИЕ ПЕРСОНАЖА (content.js → HERO_IMAGE) -->
         <span class="core__art ${HERO_IMAGE === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
           <img src="${esc(HERO_IMAGE)}" alt="">
         </span>
-        <span class="core__label">Персонаж</span>
+        <span class="core__label">${partnerDemo ? 'Демо-режим' : 'Персонаж'}</span>
       </button>
 
     </div>`;
@@ -571,6 +575,9 @@ function hintFor(point, ctx) {
     return note('Обязательная точка — время назначают организаторы, записываться не нужно.');
   }
   if (data.preview) return note('Предпросмотр: запись и отмена брони отключены.');
+  if (isPartnerDemo(state.me)) {
+    return note('Партнёрский демо-режим: расписание доступно только для просмотра.');
+  }
   if (state.me.role !== 'leader') {
     return note('Записывает команду только староста.');
   }

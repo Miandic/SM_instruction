@@ -1,6 +1,6 @@
 use axum::extract::{Multipart, Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
 use crate::auth::{gen_code, hash_password, AuthUser, ROLE_ADMIN};
@@ -115,8 +115,19 @@ pub struct PatchUserBody {
     pub display_name: Option<String>,
     pub password: Option<String>,
     pub role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_id")]
     pub group_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_id")]
     pub point_id: Option<Option<i64>>,
+}
+
+/// Для PATCH различаем отсутствующее поле (`None`) и явный JSON `null`
+/// (`Some(None)`), которым админ снимает привязку пользователя.
+fn deserialize_nullable_id<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<i64>::deserialize(deserializer).map(Some)
 }
 
 pub async fn patch_user(
@@ -834,7 +845,7 @@ pub async fn delete_character(
 
 #[cfg(test)]
 mod tests {
-    use super::image_extension;
+    use super::{image_extension, PatchUserBody};
 
     #[test]
     fn detects_supported_image_signatures() {
@@ -849,5 +860,22 @@ mod tests {
     fn rejects_non_images_and_svg() {
         assert_eq!(image_extension(b"plain text"), None);
         assert_eq!(image_extension(b"<svg><script/></svg>"), None);
+    }
+
+    #[test]
+    fn patch_user_distinguishes_missing_and_null_relations() {
+        let missing: PatchUserBody = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.group_id, None);
+        assert_eq!(missing.point_id, None);
+
+        let cleared: PatchUserBody =
+            serde_json::from_str(r#"{"group_id":null,"point_id":null}"#).unwrap();
+        assert_eq!(cleared.group_id, Some(None));
+        assert_eq!(cleared.point_id, Some(None));
+
+        let assigned: PatchUserBody =
+            serde_json::from_str(r#"{"group_id":7,"point_id":9}"#).unwrap();
+        assert_eq!(assigned.group_id, Some(Some(7)));
+        assert_eq!(assigned.point_id, Some(Some(9)));
     }
 }

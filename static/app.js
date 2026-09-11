@@ -11,7 +11,7 @@
 
 import { EVENT } from './content.js';
 import {
-  $, api, esc, state, clearSession, flash, isPlayer, homeRoute, ROLE_LABELS,
+  $, api, esc, state, clearSession, flash, isPlayer, homeRoute, roleLabel,
 } from './js/core.js';
 import { initSheet, closeSheet } from './js/sheet.js';
 import { renderLanding, openOrg } from './js/landing.js';
@@ -33,8 +33,7 @@ function renderTopbar() {
       </a>
       ${me ? `
         <div class="usermenu">
-          <span class="usermenu__info">${esc(me.display_name)} · ${
-            ROLE_LABELS[me.role] || esc(me.role)}${
+          <span class="usermenu__info">${esc(me.display_name)} · ${esc(roleLabel(me))}${
             me.group_name ? ', ' + esc(me.group_name)
               : me.point_name ? ', ' + esc(me.point_name) : ''}</span>
           <button class="btn btn--sm" id="logout">Выйти</button>

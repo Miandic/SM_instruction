@@ -3,7 +3,7 @@
 
 import {
   $, api, apiForm, ask, askText, esc, state, flash, fmtT, fmtDT, nums,
-  ROLE_LABELS, STATUS_LABELS, KIND_LABELS, SCORE_KIND_LABELS,
+  ROLE_LABELS, roleLabel, STATUS_LABELS, KIND_LABELS, SCORE_KIND_LABELS,
   bindActions, bindForms,
 } from './core.js';
 import { bookingCtx, slotChips } from './slots.js';
@@ -443,7 +443,7 @@ RENDERERS.admin = async () => {
             <tr class="is-me">
               <td>${esc(u.login)}</td>
               <td>${esc(u.display_name)}</td>
-              <td>${ROLE_LABELS[u.role] || esc(u.role)}</td>
+              <td>${esc(roleLabel(u))}</td>
               <td>${esc(u.group_name ?? u.point_name ?? '—')}</td>
               <td><button class="btn btn--sm" data-act="reset-pw" data-id="${u.id}"
                           data-login="${esc(u.login)}">Сменить пароль</button></td>

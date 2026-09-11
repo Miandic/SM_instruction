@@ -344,6 +344,28 @@ mod tests {
         .await;
         assert!(matches!(missing_code, Err(ApiError::BadRequest(_))));
 
+        // Партнёрский демо-аккаунт заводится администратором как студент без
+        // группы. Публичная регистрация не должна уметь создать ни такую
+        // служебную роль, ни студента без обязательной привязки к группе.
+        for (login, role) in [
+            ("partner-role-test", "partner"),
+            ("groupless-student-test", ROLE_STUDENT),
+        ] {
+            let result = register(
+                State(state.clone()),
+                Json(RegisterBody {
+                    login: login.into(),
+                    password: "secret1".into(),
+                    display_name: login.into(),
+                    role: role.into(),
+                    group_name: None,
+                    code: None,
+                }),
+            )
+            .await;
+            assert!(matches!(result, Err(ApiError::BadRequest(_))));
+        }
+
         let organizer_code: String =
             sqlx::query_scalar("SELECT organizer_code FROM points LIMIT 1")
                 .fetch_one(&state.db)

@@ -28,6 +28,12 @@ export const state = {
   cache: { groups: [], points: [], characters: [] },
 };
 
+/** Партнёрский демо-аккаунт — служебный студент без учебной группы. */
+export const isPartnerDemo = me => !!me && me.role === 'student' && !me.group_id;
+
+/** Подпись роли учитывает служебный партнёрский аккаунт. */
+export const roleLabel = me => isPartnerDemo(me) ? 'Партнёр (демо)' : ROLE_LABELS[me?.role] || me?.role || '';
+
 /** Игрок — староста или студент: у них главная с радиальным меню. */
 export const isPlayer = me => !!me && (me.role === 'leader' || me.role === 'student');
 

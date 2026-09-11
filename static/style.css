@@ -1048,6 +1048,8 @@ img[src="img/organizations/profsoyuz.png"] {
 }
 .core:hover { scale: 1.05; }
 .core:active { scale: .98; }
+.core--static { cursor: default; }
+.core--static:hover, .core--static:active { scale: 1; }
 
 .core__art {
   display: grid;
