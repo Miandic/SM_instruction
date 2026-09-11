@@ -566,6 +566,17 @@ img[src="img/organizations/profsoyuz.png"] {
 .partner-icon--timati-karting .partner-icon__image,
 .partner-card--timati-karting .partner-card__image { transform: scale(1.35); }
 
+/* У этих четырёх логотипов заметные поля вокруг знака. Увеличиваем их во всех
+   карточках партнёров, не меняя размеры сетки и подписей. */
+.partner-icon--kuulklever .partner-icon__image,
+.partner-card--kuulklever .partner-card__image,
+.partner-icon--ballers-street .partner-icon__image,
+.partner-card--ballers-street .partner-card__image,
+.partner-icon--debosh .partner-icon__image,
+.partner-card--debosh .partner-card__image,
+.partner-icon--modano .partner-icon__image,
+.partner-card--modano .partner-card__image { transform: scale(1.25); }
+
 /* В исходниках «Тайрай» вокруг знака почти 2/3 прозрачного поля, а у
    «Мосигры» — широкие поля по бокам. Масштабируем изображение внутри того же
    окна и отсекаем только пустые края: размер карточек и подписи не меняются. */
@@ -712,10 +723,18 @@ img[src="img/organizations/profsoyuz.png"] {
    В баннере сохраняем то же пропорциональное дополнительное увеличение. */
 [data-partner-banner] .ad-banner--partner-tairai .ad-banner__visual,
 [data-partner-banner] .ad-banner--partner-mosigra .ad-banner__visual,
-[data-partner-banner] .ad-banner--partner-timati-karting .ad-banner__visual { overflow: clip; }
+[data-partner-banner] .ad-banner--partner-timati-karting .ad-banner__visual,
+[data-partner-banner] .ad-banner--partner-kuulklever .ad-banner__visual,
+[data-partner-banner] .ad-banner--partner-ballers-street .ad-banner__visual,
+[data-partner-banner] .ad-banner--partner-debosh .ad-banner__visual,
+[data-partner-banner] .ad-banner--partner-modano .ad-banner__visual { overflow: clip; }
 [data-partner-banner] .ad-banner--partner-tairai .ad-banner__visual img { transform: scale(1.85); }
 [data-partner-banner] .ad-banner--partner-mosigra .ad-banner__visual img { transform: scale(1.5); }
 [data-partner-banner] .ad-banner--partner-timati-karting .ad-banner__visual img { transform: scale(1.35); }
+[data-partner-banner] .ad-banner--partner-kuulklever .ad-banner__visual img,
+[data-partner-banner] .ad-banner--partner-ballers-street .ad-banner__visual img,
+[data-partner-banner] .ad-banner--partner-debosh .ad-banner__visual img,
+[data-partner-banner] .ad-banner--partner-modano .ad-banner__visual img { transform: scale(1.25); }
 
 @media (min-width: 620px) {
   .ad-banner {

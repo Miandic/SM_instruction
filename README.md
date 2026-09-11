@@ -16,8 +16,8 @@ Copy-Item .env.example .env  # задать сильный ADMIN_PASSWORD
 cargo run                    # http://localhost:8080
 ```
 
-При первом запуске создаются: админ (`ADMIN_LOGIN`/`ADMIN_PASSWORD`), 13 групп-заглушек
-(СМ1-11 … СМ13-11) и стартовые персонажи. API описан в docs/PLAN.md.
+При первом запуске создаются: админ (`ADMIN_LOGIN`/`ADMIN_PASSWORD`), утверждённый список из
+31 учебной группы и стартовые персонажи. API описан в docs/PLAN.md.
 
 ## Проверки
 

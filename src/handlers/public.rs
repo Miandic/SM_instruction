@@ -37,7 +37,13 @@ pub async fn characters(State(state): State<AppState>) -> ApiResult<Json<Vec<Cha
 pub async fn points(State(state): State<AppState>) -> ApiResult<Json<Vec<Point>>> {
     let rows = sqlx::query_as::<_, Point>(
         "SELECT id, name, description, logo_url, image_urls, location, kind, is_active
-         FROM points WHERE is_active = 1 ORDER BY name",
+         FROM points
+         WHERE is_active = 1
+         ORDER BY CASE
+             WHEN kind = 'noc' AND name = 'Студенческий совет факультета СМ' THEN 0
+             WHEN kind = 'noc' AND name = 'Студенческий совет общежития №11' THEN 1
+             ELSE 2
+         END, name",
     )
     .fetch_all(&state.db)
     .await?;

@@ -322,7 +322,7 @@ mod tests {
                     password: "secret1".into(),
                     display_name: login.into(),
                     role: role.into(),
-                    group_name: Some("СМ1-11".into()),
+                    group_name: Some("СМ1-11/4".into()),
                     code: None,
                 }),
             )
