@@ -516,22 +516,25 @@ img[src="img/organizations/profsoyuz.png"] {
   width: var(--partner-backdrop-width);
   aspect-ratio: var(--partner-backdrop-ratio);
   transform: translate(-50%, -50%);
-  border-radius: 13%;
+  /* Фиксированный радиус сохраняет круглые углы и у широких, и у узких знаков. */
+  border-radius: 8px;
   background: rgba(89, 60, 129, .58);
+  /* Ровный внешний отступ вокруг картинки, без изменения размера карточки. */
+  box-shadow: 0 0 0 2px rgba(89, 60, 129, .58);
 }
 .partner-icon--kuulklever .partner-icon__image,
 .partner-card--kuulklever .partner-card__image {
-  --partner-backdrop-width: 104%;
+  --partner-backdrop-width: 100%;
   --partner-backdrop-ratio: 2239 / 1054;
 }
 .partner-icon--mafia-vip .partner-icon__image,
 .partner-card--mafia-vip .partner-card__image {
-  --partner-backdrop-width: 104%;
+  --partner-backdrop-width: 100%;
   --partner-backdrop-ratio: 2124 / 2457;
 }
 .partner-icon--timati-karting .partner-icon__image,
 .partner-card--timati-karting .partner-card__image {
-  --partner-backdrop-width: 104%;
+  --partner-backdrop-width: 100%;
   /* В PNG большой прозрачный отступ сверху и снизу; подложка берёт
      пропорции только видимого двухстрочного знака. */
   --partner-backdrop-ratio: 937 / 415;
