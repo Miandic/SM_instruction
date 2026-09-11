@@ -517,7 +517,7 @@ img[src="img/organizations/profsoyuz.png"] {
   aspect-ratio: var(--partner-backdrop-ratio);
   transform: translate(-50%, -50%);
   border-radius: 13%;
-  background: rgba(27, 21, 41, .52);
+  background: rgba(59, 42, 107, .68);
 }
 .partner-icon--kuulklever .partner-icon__image,
 .partner-card--kuulklever .partner-card__image {
