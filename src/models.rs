@@ -97,7 +97,7 @@ pub struct RatingRow {
 /// присутствуют, а `updated_at` отражает последнее изменение баллов или статов.
 #[derive(Serialize, FromRow)]
 pub struct AdminProgressRow {
-    pub group_id: i64,
+    pub group_name: String,
     pub character_name: Option<String>,
     pub total_points: i64,
     pub available_points: i64,

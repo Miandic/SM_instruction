@@ -119,7 +119,7 @@ pub async fn progression(
 ) -> ApiResult<Json<Vec<AdminProgressRow>>> {
     admin_only(&user)?;
     let rows = sqlx::query_as::<_, AdminProgressRow>(
-        "SELECT g.id AS group_id, c.name AS character_name,
+        "SELECT g.name AS group_name, c.name AS character_name,
                 COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0) AS total_points,
                 MAX(0,
                   COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0)
@@ -650,7 +650,9 @@ pub async fn bookings(State(state): State<AppState>, user: AuthUser) -> ApiResul
     }
     let rows = sqlx::query_as::<_, AdminBooking>(
         "SELECT b.id, b.group_id, g.name AS group_name, p.name AS point_name,
-                s.starts_at, s.ends_at, b.location, b.status, b.created_at, b.mandatory
+                COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
+                COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at,
+                b.location, b.status, b.created_at, b.mandatory
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN groups g ON g.id = b.group_id
@@ -980,7 +982,7 @@ mod tests {
         .await
         .unwrap();
         let row = &rows[0];
-        assert_eq!(row.group_id, group_id);
+        assert!(!row.group_name.is_empty());
         assert_eq!(row.total_points, 9);
         assert_eq!(row.available_points, 6);
         assert_eq!(

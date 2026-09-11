@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS bookings (
     status     TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
     -- аудитория обязательного назначения может отличаться у групп в одном слоте
     location   TEXT NOT NULL DEFAULT '',
+    -- для заранее назначенной точки время может отличаться у групп одного слота
+    scheduled_starts_at INTEGER,
+    scheduled_ends_at   INTEGER,
     -- бронь на обязательную точку: назначается заранее и не занимает
     -- единственный слот команды (иначе она не смогла бы записаться никуда ещё)
     mandatory  INTEGER NOT NULL DEFAULT 0,

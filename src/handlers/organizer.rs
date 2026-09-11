@@ -19,7 +19,9 @@ pub async fn bookings(
     // Исторические записи за тест сохраняем в выдаче отдельно: они могли быть
     // начислены до перехода НОЦ на единую оценку за задание.
     let rows = sqlx::query_as::<_, OrganizerBooking>(
-        "SELECT b.id, b.group_id, g.name AS group_name, b.status, s.starts_at, s.ends_at, b.location,
+        "SELECT b.id, b.group_id, g.name AS group_name, b.status,
+                COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
+                COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at, b.location,
                 b.created_at,
                 (SELECT points FROM score_entries se
                   WHERE se.booking_id = b.id AND se.kind = 'test') AS test_points,

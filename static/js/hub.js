@@ -561,12 +561,22 @@ async function fillBooking() {
 }
 
 function bookingHtml(point, slots, ctx) {
+  const assigned = ctx.fixed.filter(b => b.point_id === point.id);
+  const schedule = point.kind === 'mandatory'
+    ? assigned.length
+      ? `<div class="list">${assigned.map(b => `
+          <div class="item">
+            <b>${fmtDT(b.starts_at)}–${fmtT(b.ends_at)}</b>
+            ${b.location ? `<div class="item__meta">${esc(b.location)}</div>` : ''}
+          </div>`).join('')}</div>`
+      : '<p class="note">Время ещё не назначено.</p>'
+    : slotChips(slots, point, ctx, Date.now() / 1000,
+      data.preview ? { role: 'leader', readOnly: true } : {});
   return `
     <h3 class="booking__head">Расписание</h3>
     <p class="note">${esc(point.location || 'Место уточняется')}</p>
     ${hintFor(point, ctx)}
-    ${slotChips(slots, point, ctx, Date.now() / 1000,
-      data.preview ? { role: 'leader', readOnly: true } : {})}`;
+    ${schedule}`;
 }
 
 /** Почему кнопки записи может не быть — объясняем до того, как её нажмут. */

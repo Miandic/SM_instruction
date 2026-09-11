@@ -137,7 +137,9 @@ pub async fn group_detail(
     .await?;
 
     let bookings = sqlx::query_as::<_, BookingView>(
-        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at, b.location,
+        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name,
+                COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
+                COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at, b.location,
                 b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.group_id = ? ORDER BY s.starts_at",

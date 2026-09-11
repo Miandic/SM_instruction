@@ -106,7 +106,7 @@ RENDERERS.points = async () => {
   return notice + `<div class="stack">` + points.map(p => {
     const badge = ctx.completed.has(p.id) ? `<span class="badge badge--done">пройдена</span>`
       : active?.point_id === p.id ? `<span class="badge badge--current">активная бронь</span>` : '';
-    const chips = slotChips(byPoint[p.id] || [], p, ctx, now);
+    const chips = p.kind === 'mandatory' ? '' : slotChips(byPoint[p.id] || [], p, ctx, now);
     return `
       <article class="card">
         <header class="card__head">
@@ -297,12 +297,12 @@ RENDERERS.org = async () => {
 // ---------- админка ----------
 
 const progressionHeaders = [
-  'Персонаж', 'Всего очков', 'Нераспределённые очки',
+  'Группа / персонаж', 'Всего очков', 'Нераспределённые очки',
   'Мужество', 'Воля', 'Труд', 'Упорство', 'Время последнего обновления',
 ];
 
 const tsvCell = value => String(value ?? '').replace(/[\t\r\n]+/g, ' ');
-const progressionCharacter = row => `${row.group_id}. ${row.character_name ?? '—'}`;
+const progressionCharacter = row => `${row.group_name} — ${row.character_name ?? '—'}`;
 
 function progressionTsv(rows) {
   return [progressionHeaders, ...rows.map(row => [

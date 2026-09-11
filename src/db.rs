@@ -40,6 +40,8 @@ async fn migrate(db: &SqlitePool) -> Result<(), sqlx::Error> {
     add_column(db, "points", "image_urls", "TEXT NOT NULL DEFAULT ''").await?;
     add_column(db, "bookings", "mandatory", "INTEGER NOT NULL DEFAULT 0").await?;
     add_column(db, "bookings", "location", "TEXT NOT NULL DEFAULT ''").await?;
+    add_column(db, "bookings", "scheduled_starts_at", "INTEGER").await?;
+    add_column(db, "bookings", "scheduled_ends_at", "INTEGER").await?;
     add_column(db, "score_entries", "kind", "TEXT NOT NULL DEFAULT 'task'").await?;
     add_column(
         db,
@@ -319,12 +321,20 @@ mod tests {
         .unwrap();
         assert_eq!(card, ("Описание".into(), String::new(), String::new()));
         let booking_location: String = sqlx::query_scalar(
-            "SELECT location FROM pragma_table_info('bookings') WHERE name = 'location'",
+            "SELECT name FROM pragma_table_info('bookings') WHERE name = 'location'",
         )
         .fetch_one(&db)
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(booking_location, "location");
+        let scheduled_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('bookings')
+             WHERE name IN ('scheduled_starts_at', 'scheduled_ends_at')",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(scheduled_columns, 2);
 
         db.close().await;
         db_w.close().await;

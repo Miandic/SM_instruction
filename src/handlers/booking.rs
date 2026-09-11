@@ -159,7 +159,9 @@ pub async fn my(
 ) -> ApiResult<Json<Vec<BookingView>>> {
     let group_id = user.group()?;
     let rows = sqlx::query_as::<_, BookingView>(
-        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at, b.location,
+        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name,
+                COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
+                COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at, b.location,
                 b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.group_id = ? ORDER BY s.starts_at",
@@ -172,7 +174,9 @@ pub async fn my(
 
 pub async fn fetch_booking(state: &AppState, id: i64) -> ApiResult<BookingView> {
     sqlx::query_as::<_, BookingView>(
-        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name, s.starts_at, s.ends_at, b.location,
+        "SELECT b.id, b.slot_id, s.point_id, p.name AS point_name,
+                COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
+                COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at, b.location,
                 b.status, b.created_at, b.mandatory
          FROM bookings b JOIN slots s ON s.id = b.slot_id JOIN points p ON p.id = s.point_id
          WHERE b.id = ?",
