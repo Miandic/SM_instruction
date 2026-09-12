@@ -35,6 +35,15 @@ const ACTIVITY_ICONS = {
   'Фотолото': '/img/activity-icons/photo-lotto.png',
 };
 
+/** Векторные иконки обязательных точек из переданных макетов. */
+const MANDATORY_ICONS = {
+  'Экзамен': '/img/mandatory-icons/exam.svg',
+  'Босс': '/img/mandatory-icons/boss.svg',
+  'Администрация': '/img/mandatory-icons/administration.svg',
+};
+
+const HUB_PERSON_ICON = '/img/hub-person.svg';
+
 let hubHost = null;
 let menuIndex = 0;
 let currentItem = null;
@@ -56,7 +65,9 @@ const fromPoint = p => ({
   id: 'p-' + p.id,
   name: p.name,
   desc: p.description,
-  icon: p.kind === 'activity' ? ACTIVITY_ICONS[p.name] || '' : '',
+  icon: p.kind === 'activity'
+    ? ACTIVITY_ICONS[p.name] || ''
+    : p.kind === 'mandatory' ? MANDATORY_ICONS[p.name] || '' : '',
   logo: p.logo_url || PLACEHOLDER_LOGO,
   about: p.description ? p.description.split(/\n\s*\n/).filter(Boolean) : [],
   images: (p.image_urls || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean),
@@ -457,7 +468,9 @@ function wheelHtml(items, stateOf, className = '', interactive = true) {
   }).join('');
 
   const partnerDemo = !data.preview && isPartnerDemo(state.me);
-  const image = characterImage(data.characterName);
+  // Пока команда не выбрала персонажа, центр остаётся явной кнопкой перехода
+  // к выбору, а не показывает логотип-заглушку.
+  const image = data.characterName ? characterImage(data.characterName) : HUB_PERSON_ICON;
 
   return `
     <div class="wheel ${className}">
@@ -530,7 +543,7 @@ export async function openItemSheet(id) {
       ${sheetBar()}
       <div class="wrap sheet__body">
         <div class="bubble">
-          <span class="org__logo"><img src="${esc(o.logo)}" alt=""></span>
+          <span class="org__logo"><img src="${esc(o.icon || o.logo)}" alt=""></span>
           <h2>${esc(o.name)}</h2>
         </div>
 
