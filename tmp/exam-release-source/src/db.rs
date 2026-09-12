@@ -220,34 +220,15 @@ async fn seed(db: &SqlitePool) -> Result<(), sqlx::Error> {
         .fetch_one(db)
         .await?;
     if characters == 0 {
-        for name in ["Активист", "Инженер", "Спортсмен", "Творец"] {
+        // заглушки: реальные персонажи и правила прокачки придут от заказчика
+        for n in 1..=4 {
             sqlx::query("INSERT INTO characters (name, description) VALUES (?, ?)")
-                .bind(name)
-                .bind("")
+                .bind(format!("Персонаж {n}"))
+                .bind("Описание появится позже.")
                 .execute(db)
                 .await?;
         }
-        tracing::info!("создано 4 персонажа: Активист, Инженер, Спортсмен, Творец");
-    } else {
-        // Обновляем только четыре исходные заглушки. Каталог, который уже
-        // редактировался администратором, этим не затрагивается.
-        for (old, new) in [
-            ("Персонаж 1", "Активист"),
-            ("Персонаж 2", "Инженер"),
-            ("Персонаж 3", "Спортсмен"),
-            ("Персонаж 4", "Творец"),
-        ] {
-            sqlx::query(
-                "UPDATE characters SET name = ?, description = ''
-                 WHERE name = ?
-                   AND NOT EXISTS (SELECT 1 FROM characters WHERE name = ?)",
-            )
-            .bind(new)
-            .bind(old)
-            .bind(new)
-            .execute(db)
-            .await?;
-        }
+        tracing::info!("создано 4 персонажа-заглушки (Персонаж 1 … Персонаж 4)");
     }
 
     Ok(())

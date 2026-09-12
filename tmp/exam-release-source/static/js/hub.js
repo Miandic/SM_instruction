@@ -4,7 +4,7 @@
      организации (точки типа noc) → активности → обязательные точки.
    Клик по лучу открывает укороченную карточку с расписанием. */
 
-import { characterImage, PARTNERS, PLACEHOLDER_LOGO } from '../content.js';
+import { HERO_IMAGE, PARTNERS, PLACEHOLDER_LOGO } from '../content.js';
 import { $, api, ask, esc, state, flash, fmtT, fmtDT, bindActions, isPartnerDemo } from './core.js';
 import { partnerBanner } from './banner.js';
 import { openSheet, sheetBar, isSheetOpen } from './sheet.js';
@@ -23,18 +23,6 @@ const f = n => n.toFixed(2);
 /** Цвет луча говорит о состоянии; текст нужен только скринридеру. */
 const STATE_LABELS = { booked: 'вы записаны', done: 'точка пройдена' };
 
-/** Локальные PNG делают внешний вид иконок одинаковым на всех устройствах. */
-const ACTIVITY_ICONS = {
-  'Буфет': '/img/activity-icons/buffet.png',
-  'Сопоставь цвет': '/img/activity-icons/match-color.png',
-  'Номера': '/img/activity-icons/numbers.png',
-  'Обратная сторона': '/img/activity-icons/other-side.png',
-  'Расшифровка': '/img/activity-icons/decode.png',
-  'Зарядки': '/img/activity-icons/exercise.png',
-  'Точка опоры': '/img/activity-icons/support.png',
-  'Фотолото': '/img/activity-icons/photo-lotto.png',
-};
-
 let hubHost = null;
 let menuIndex = 0;
 let currentItem = null;
@@ -46,7 +34,7 @@ let carouselRaf = null;
 /** Данные последней загрузки: переключение меню по ним же, без новых запросов. */
 let data = {
   points: [], ctx: bookingCtx([]), bookings: [], preview: false,
-  groupId: null, groups: [], characterName: '', routeBase: '#/home',
+  groupId: null, groups: [], routeBase: '#/home',
 };
 
 // ---------- меню ----------
@@ -56,7 +44,6 @@ const fromPoint = p => ({
   id: 'p-' + p.id,
   name: p.name,
   desc: p.description,
-  icon: p.kind === 'activity' ? ACTIVITY_ICONS[p.name] || '' : '',
   logo: p.logo_url || PLACEHOLDER_LOGO,
   about: p.description ? p.description.split(/\n\s*\n/).filter(Boolean) : [],
   images: (p.image_urls || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean),
@@ -107,23 +94,16 @@ export async function renderHub(host, options = {}) {
   let groups = [];
   let groupId = null;
   let myBookings = [];
-  let characterName = '';
   const points = await api('/points');
 
   if (preview) {
     groups = await api('/groups');
     const requested = Number(options.groupId);
     groupId = groups.some(g => g.id === requested) ? requested : groups[0]?.id;
-    if (groupId) {
-      const detail = await api('/groups/' + groupId);
-      myBookings = detail.bookings;
-      characterName = detail.group.character_name || '';
-    }
+    if (groupId) myBookings = (await api('/groups/' + groupId)).bookings;
   } else if (state.me.group_id) {
     groupId = state.me.group_id;
-    const detail = await api('/groups/' + groupId);
-    myBookings = detail.bookings;
-    characterName = detail.group.character_name || '';
+    myBookings = await api('/bookings/my');
   }
   state.cache.points = points;
   data = {
@@ -133,7 +113,6 @@ export async function renderHub(host, options = {}) {
     preview,
     groupId,
     groups,
-    characterName,
     routeBase: preview ? '#/preview/' + (groupId || '') : '#/home',
   };
 
@@ -449,15 +428,12 @@ function wheelHtml(items, stateOf, className = '', interactive = true) {
               data-act="open" data-id="${esc(o.id)}"
               ${disabled}
               aria-label="${esc(o.name)}${st ? ' — ' + STATE_LABELS[st] : ''}">
-        <span class="node__logo">${o.icon
-          ? `<img src="${esc(o.icon)}" alt="" loading="lazy">`
-          : `<img src="${esc(o.logo)}" alt="" loading="lazy">`}</span>
+        <span class="node__logo"><img src="${esc(o.logo)}" alt="" loading="lazy"></span>
         <span class="node__name">${esc(o.name)}</span>
       </button>`;
   }).join('');
 
   const partnerDemo = !data.preview && isPartnerDemo(state.me);
-  const image = characterImage(data.characterName);
 
   return `
     <div class="wheel ${className}">
@@ -471,8 +447,9 @@ function wheelHtml(items, stateOf, className = '', interactive = true) {
 
       <button class="core ${partnerDemo ? 'core--static' : ''}" data-act="hero"
               ${partnerDemo ? 'disabled aria-label="Партнёрский демо-режим"' : disabled}>
-        <span class="core__art ${image === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
-          <img src="${esc(image)}" alt="">
+        <!-- ЗАМЕНИТЬ НА ИЗОБРАЖЕНИЕ ПЕРСОНАЖА (content.js → HERO_IMAGE) -->
+        <span class="core__art ${HERO_IMAGE === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
+          <img src="${esc(HERO_IMAGE)}" alt="">
         </span>
         <span class="core__label">${partnerDemo ? 'Демо-режим' : 'Персонаж'}</span>
       </button>

@@ -126,17 +126,9 @@ export const PARTNERS = [
 
 /* ---------- персонаж ---------- */
 
-/** Иллюстрации персонажей из папки «Персонажи». Ключ — имя в каталоге БД.
-    Неизвестный персонаж (например, добавленный администратором) показывает
-    нейтральную заглушку, пока для него не будет добавлен арт. */
-const CHARACTER_IMAGES = {
-  'Активист': '/img/characters/Активист.png',
-  'Инженер': '/img/characters/Инженер.png',
-  'Спортсмен': '/img/characters/Спортсмен.png',
-  'Творец': '/img/characters/Творец.png',
-};
-
-export const characterImage = name => CHARACTER_IMAGES[name] || PLACEHOLDER_LOGO;
+/** ЗАМЕНИТЬ НА ИЗОБРАЖЕНИЕ ПЕРСОНАЖА: положить арт в static/img/ и указать путь.
+    Пока стоит плейсхолдер — страница персонажа рисует его блёклым. */
+export const HERO_IMAGE = PLACEHOLDER_LOGO;
 
 /** Характеристики. Ключи обязаны совпадать со STAT_KEYS в src/models.rs. */
 export const STATS = [

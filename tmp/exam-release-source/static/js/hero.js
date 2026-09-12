@@ -1,7 +1,7 @@
 /* Страница персонажа: изображение, счётчик очков и четыре характеристики,
    которые староста прокачивает за баллы команды. */
 
-import { characterImage, PLACEHOLDER_LOGO, STATS, STAT_SCALE } from '../content.js';
+import { HERO_IMAGE, PLACEHOLDER_LOGO, STATS, STAT_SCALE } from '../content.js';
 import { api, esc, state, flash, bindActions } from './core.js';
 
 let heroHost = null;
@@ -25,13 +25,6 @@ export async function renderHero(host, options = {}) {
   const cost = d.upgrade_cost;
   const isLeader = state.me.role === 'leader' && !preview;
   const leaderView = isLeader || preview;
-  // До подтверждения выбора показываем арт первого (или выбранного в списке)
-  // персонажа. Сама команда при этом ещё не получает character_id.
-  if (!g.character_name && leaderView && !state.cache.characters.length) {
-    state.cache.characters = await api('/characters');
-  }
-  const previewName = g.character_name || state.cache.characters[0]?.name;
-  const image = characterImage(previewName);
 
   host.innerHTML = `
     <section class="wrap section hero">
@@ -42,8 +35,9 @@ export async function renderHero(host, options = {}) {
         <a class="btn btn--sm" href="#/app/admin">Вернуться в админку</a>
       </div>` : ''}
 
-      <div class="hero__art ${image === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
-        <img src="${esc(image)}" alt="${esc(g.character_name || 'Персонаж')}">
+      <!-- ЗАМЕНИТЬ НА ИЗОБРАЖЕНИЕ ПЕРСОНАЖА (content.js → HERO_IMAGE) -->
+      <div class="hero__art ${HERO_IMAGE === PLACEHOLDER_LOGO ? 'is-empty' : ''}">
+        <img src="${esc(HERO_IMAGE)}" alt="${esc(g.character_name || 'Персонаж')}">
       </div>
 
       <header class="hero__title">
@@ -80,7 +74,6 @@ export async function renderHero(host, options = {}) {
     </section>`;
 
   bindActions(host, ACTIONS);
-  bindCharacterPreview(host);
 }
 
 const back = (preview = false, groupId = null) => `
@@ -124,29 +117,12 @@ async function pickerHtml(isLeader, preview = false) {
       <div class="inline-form">
         <select id="char-sel" aria-label="Персонаж">
           ${state.cache.characters.map(c =>
-            `<option value="${c.id}">${esc(c.name)}${c.description ? ' — ' + esc(c.description) : ''}</option>`).join('')}
+            `<option value="${c.id}">${esc(c.name)} — ${esc(c.description)}</option>`).join('')}
         </select>
         <button class="btn btn--primary" data-act="pick" ${preview ? 'disabled' : ''}>Выбрать</button>
       </div>
       <p class="note note--warn">Выбор окончательный — поменять сможет только админ.</p>
     </div>`;
-}
-
-/** Меняет только визуальный предпросмотр; выбор сохраняет отдельная кнопка. */
-function bindCharacterPreview(host) {
-  const select = host.querySelector('#char-sel');
-  if (!select) return;
-
-  select.addEventListener('change', () => {
-    const character = state.cache.characters.find(c => c.id === Number(select.value));
-    const image = characterImage(character?.name);
-    const art = host.querySelector('.hero__art');
-    const img = art?.querySelector('img');
-    if (!art || !img) return;
-    img.src = image;
-    img.alt = character?.name || 'Персонаж';
-    art.classList.toggle('is-empty', image === PLACEHOLDER_LOGO);
-  });
 }
 
 const ACTIONS = {

@@ -1,0 +1,187 @@
+use axum::extract::State;
+use axum::Json;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::auth::{AuthUser, ROLE_ORGANIZER};
+use crate::error::{ApiError, ApiResult};
+use crate::models::*;
+use crate::state::AppState;
+
+/// Записи (активные и завершённые) на точку организатора.
+pub async fn bookings(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<OrganizerBooking>>> {
+    user.require(&[ROLE_ORGANIZER])?;
+    let point_id = user.point()?;
+
+    // Исторические записи за тест сохраняем в выдаче отдельно: они могли быть
+    // начислены до перехода НОЦ на единую оценку за задание.
+    let rows = sqlx::query_as::<_, OrganizerBooking>(
+        "SELECT b.id, b.group_id, g.name AS group_name, b.status,
+                COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
+                COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at, b.location,
+                b.created_at,
+                (SELECT points FROM score_entries se
+                  WHERE se.booking_id = b.id AND se.kind = 'test') AS test_points,
+                (SELECT points FROM score_entries se
+                  WHERE se.booking_id = b.id AND se.kind = 'task') AS task_points
+         FROM bookings b
+         JOIN slots s ON s.id = b.slot_id
+         JOIN groups g ON g.id = b.group_id
+         WHERE s.point_id = ? AND b.status IN ('active', 'completed')
+         ORDER BY s.starts_at",
+    )
+    .bind(point_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+pub struct CompleteBody {
+    pub booking_id: i64,
+    /// Поле оставлено только для явного отклонения старых клиентов.
+    pub test_points: Option<i64>,
+    /// Баллы за задание — обязательны для НОЦ и активностей.
+    pub task_points: Option<i64>,
+    pub comment: Option<String>,
+}
+
+fn check_range(value: i64) -> Result<(), ApiError> {
+    if (0..=10).contains(&value) {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(
+            "баллы за задание должны быть в диапазоне 0–10".into(),
+        ))
+    }
+}
+
+fn validate_scores(kind: &str, body: &CompleteBody) -> Result<(), ApiError> {
+    if body.test_points.is_some() {
+        return Err(ApiError::BadRequest(
+            "оценка за тест больше не используется".into(),
+        ));
+    }
+
+    let need_task = matches!(kind, KIND_NOC | KIND_ACTIVITY);
+    if need_task != body.task_points.is_some() {
+        return Err(ApiError::BadRequest(if need_task {
+            "укажите баллы за задание".into()
+        } else {
+            "за обязательную точку баллы не начисляются".into()
+        }));
+    }
+    if let Some(points) = body.task_points {
+        check_range(points)?;
+    }
+    Ok(())
+}
+
+/// Завершить визит команды и начислить баллы по правилам типа точки.
+pub async fn complete(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<CompleteBody>,
+) -> ApiResult<Json<Value>> {
+    user.require(&[ROLE_ORGANIZER])?;
+    let point_id = user.point()?;
+
+    let kind: String = sqlx::query_scalar("SELECT kind FROM points WHERE id = ?")
+        .bind(point_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("точка не найдена".into()))?;
+
+    validate_scores(&kind, &body)?;
+
+    let mut tx = state.db_w.begin().await?;
+
+    let row: Option<(i64, String, i64)> = sqlx::query_as(
+        "SELECT b.group_id, b.status, s.point_id
+         FROM bookings b JOIN slots s ON s.id = b.slot_id WHERE b.id = ?",
+    )
+    .bind(body.booking_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (group_id, status, booking_point) =
+        row.ok_or_else(|| ApiError::NotFound("бронь не найдена".into()))?;
+    if booking_point != point_id {
+        return Err(ApiError::Forbidden(
+            "эта бронь относится к другой точке".into(),
+        ));
+    }
+    if status != "active" {
+        return Err(ApiError::Conflict(
+            "бронь уже завершена или отменена".into(),
+        ));
+    }
+
+    sqlx::query("UPDATE bookings SET status = 'completed' WHERE id = ?")
+        .bind(body.booking_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let comment = body.comment.unwrap_or_default();
+    let now = now_ts();
+    let mut total = 0;
+
+    if let Some(points) = body.task_points {
+        sqlx::query(
+            "INSERT INTO score_entries
+                (group_id, point_id, organizer_id, booking_id, kind, points, comment, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(group_id)
+        .bind(point_id)
+        .bind(user.id)
+        .bind(body.booking_id)
+        .bind("task")
+        .bind(points)
+        .bind(&comment)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        total = points;
+    }
+
+    tx.commit().await?;
+    Ok(Json(
+        json!({ "ok": true, "group_id": group_id, "points": total }),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_range, validate_scores, CompleteBody};
+    use crate::models::{KIND_ACTIVITY, KIND_MANDATORY, KIND_NOC};
+
+    fn body(test_points: Option<i64>, task_points: Option<i64>) -> CompleteBody {
+        CompleteBody {
+            booking_id: 1,
+            test_points,
+            task_points,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn noc_and_activity_require_one_task_score() {
+        assert!(validate_scores(KIND_NOC, &body(None, Some(10))).is_ok());
+        assert!(validate_scores(KIND_ACTIVITY, &body(None, Some(0))).is_ok());
+        assert!(validate_scores(KIND_NOC, &body(None, None)).is_err());
+        assert!(validate_scores(KIND_MANDATORY, &body(None, None)).is_ok());
+    }
+
+    #[test]
+    fn test_score_is_rejected_and_task_is_limited_to_ten() {
+        assert!(validate_scores(KIND_NOC, &body(Some(1), Some(10))).is_err());
+        assert!(check_range(0).is_ok());
+        assert!(check_range(10).is_ok());
+        assert!(check_range(-1).is_err());
+        assert!(check_range(11).is_err());
+    }
+}
