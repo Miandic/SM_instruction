@@ -89,7 +89,7 @@ pub struct RatingRow {
     pub name: String,
     pub department: i64,
     pub character_name: Option<String>,
-    pub total_points: i64,
+    pub total_points: f64,
     pub level: i64,
 }
 
@@ -99,8 +99,8 @@ pub struct RatingRow {
 pub struct AdminProgressRow {
     pub group_name: String,
     pub character_name: Option<String>,
-    pub total_points: i64,
-    pub available_points: i64,
+    pub total_points: f64,
+    pub available_points: f64,
     pub courage: i64,
     pub will: i64,
     pub labor: i64,
@@ -135,7 +135,7 @@ pub struct ScoreView {
     pub organizer_name: Option<String>,
     /// test | task | manual
     pub kind: String,
-    pub points: i64,
+    pub points: f64,
     pub comment: String,
     pub created_at: i64,
 }

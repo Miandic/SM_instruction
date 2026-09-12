@@ -63,7 +63,7 @@ export const PARTNERS = [
     href: 'https://vipclubmafia.ru/?utm_source=site.ru&utm_medium=referral&utm_campaign=sitebayma',
   },
   {
-    id: 'kuulklever', name: 'Куулклевер', image: '/img/partners/coolclever.png',
+    id: 'kuulklever', name: 'КуулКлевер', image: '/img/partners/coolclever.png',
     text: 'КуулКлевер — магазины натуральных продуктов собственного производства. Кофе и свежая выпечка перед парами, вкусные готовые обеды, итальянская пицца или десерты на вечер — всё это можно найти недалеко от корпусов МГТУ им. Н.Э. Баумана в КуулКлевер.',
     href: 'https://www.coolclever.ru/catalog/myasnov',
   },
@@ -88,7 +88,7 @@ export const PARTNERS = [
     href: 'https://hobbygames.ru/',
   },
   {
-    id: 'ballers-street', name: 'Развлекательный центр «Ballers Street»', image: '/img/partners/ballers-street.jpg',
+    id: 'ballers-street', name: 'Развлекательный центр «Ballers Street»', image: '/img/partners/ballers-street.png',
     text: 'Развлекательный центр «Ballers Street» - место для семейного отдыха. Здесь вы можете весело провести время, сыграть в боулинг, бильярд и PS5. VIP-дорожки для приватной обстановки. Караоке и зона танцпола на втором этаже. Находится в ТРЦ "Ривьера" на втором этаже, работает: пн-чт 10:00 - 22:00, пт-вс 10:00-00:00. Бронируйте запись онлайн на сайте: ballers.moscow',
     href: 'https://ballers.moscow/',
   },

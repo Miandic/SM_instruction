@@ -2,7 +2,7 @@
    которые староста прокачивает за баллы команды. */
 
 import { characterImage, PLACEHOLDER_LOGO, STATS, STAT_SCALE } from '../content.js';
-import { api, esc, state, flash, bindActions } from './core.js';
+import { api, esc, state, flash, fmtPoints, bindActions } from './core.js';
 
 let heroHost = null;
 
@@ -56,11 +56,11 @@ export async function renderHero(host, options = {}) {
       <div class="pointsbar">
         <div>
           <span class="pointsbar__label">Свободные очки</span>
-          <span class="pointsbar__value">${d.available}</span>
+          <span class="pointsbar__value">${fmtPoints(d.available)}</span>
         </div>
         <div>
           <span class="pointsbar__label">Всего заработано</span>
-          <span class="pointsbar__value">${g.total_points}</span>
+          <span class="pointsbar__value">${fmtPoints(g.total_points)}</span>
         </div>
         <div>
           <span class="pointsbar__label">Уровень</span>
@@ -152,7 +152,7 @@ function bindCharacterPreview(host) {
 const ACTIONS = {
   up: async ({ stat }) => {
     const d = await api('/character/upgrade', 'POST', { stat });
-    flash(`Готово. Осталось очков: ${d.available}`);
+    flash(`Готово. Осталось очков: ${fmtPoints(d.available)}`);
     await renderHero(heroHost);
   },
 

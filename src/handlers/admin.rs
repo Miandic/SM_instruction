@@ -120,11 +120,11 @@ pub async fn progression(
     admin_only(&user)?;
     let rows = sqlx::query_as::<_, AdminProgressRow>(
         "SELECT g.name AS group_name, c.name AS character_name,
-                COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0) AS total_points,
+                CAST(COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0) AS REAL) AS total_points,
                 MAX(0,
                   COALESCE((SELECT SUM(se.points) FROM score_entries se WHERE se.group_id = g.id), 0)
                     - COALESCE((SELECT SUM(gs.spent) FROM group_stats gs WHERE gs.group_id = g.id), 0)
-                ) AS available_points,
+                ) * 1.0 AS available_points,
                 COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'courage'), 0) AS courage,
                 COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'will'), 0) AS will,
                 COALESCE((SELECT gs.value FROM group_stats gs WHERE gs.group_id = g.id AND gs.stat = 'labor'), 0) AS labor,
@@ -774,7 +774,8 @@ pub async fn scores(
     admin_only(&user)?;
     let rows = sqlx::query_as::<_, ScoreView>(
         "SELECT se.id, se.group_id, g.name AS group_name, se.point_id, p.name AS point_name,
-                u.display_name AS organizer_name, se.kind, se.points, se.comment, se.created_at
+                u.display_name AS organizer_name, se.kind, CAST(se.points AS REAL) AS points,
+                se.comment, se.created_at
          FROM score_entries se
          JOIN groups g ON g.id = se.group_id
          JOIN points p ON p.id = se.point_id
@@ -793,8 +794,16 @@ pub async fn scores(
 pub struct CreateScoreBody {
     pub group_id: i64,
     pub point_id: i64,
-    pub points: i64,
+    pub points: f64,
     pub comment: Option<String>,
+}
+
+fn validate_manual_points(points: f64) -> ApiResult<()> {
+    if (points * 2.0).fract() == 0.0 {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest("баллы должны быть кратны 0,5".into()))
+    }
 }
 
 pub async fn create_score(
@@ -803,6 +812,7 @@ pub async fn create_score(
     Json(body): Json<CreateScoreBody>,
 ) -> ApiResult<Json<Value>> {
     admin_only(&user)?;
+    validate_manual_points(body.points)?;
     let id = sqlx::query(
         "INSERT INTO score_entries
             (group_id, point_id, organizer_id, kind, points, comment, created_at)
@@ -882,7 +892,7 @@ pub async fn delete_character(
 mod tests {
     use axum::{extract::State, Json};
 
-    use super::{image_extension, progression, PatchUserBody};
+    use super::{image_extension, progression, validate_manual_points, PatchUserBody};
     use crate::{
         auth::{AuthUser, ROLE_ADMIN},
         state::AppState,
@@ -920,6 +930,14 @@ mod tests {
         assert_eq!(assigned.point_id, Some(Some(9)));
     }
 
+    #[test]
+    fn manual_scores_accept_half_points_only() {
+        assert!(validate_manual_points(0.5).is_ok());
+        assert!(validate_manual_points(7.0).is_ok());
+        assert!(validate_manual_points(-1.5).is_ok());
+        assert!(validate_manual_points(0.25).is_err());
+    }
+
     #[tokio::test]
     async fn progression_returns_current_stats_balance_and_latest_update() {
         let path = std::env::temp_dir().join(format!(
@@ -953,7 +971,7 @@ mod tests {
             .unwrap();
         sqlx::query(
             "INSERT INTO score_entries (group_id, point_id, kind, points, comment, created_at)
-             VALUES (?, ?, 'manual', 9, '', 120)",
+             VALUES (?, ?, 'manual', 9.5, '', 120)",
         )
         .bind(group_id)
         .bind(point_id)
@@ -983,8 +1001,8 @@ mod tests {
         .unwrap();
         let row = &rows[0];
         assert!(!row.group_name.is_empty());
-        assert_eq!(row.total_points, 9);
-        assert_eq!(row.available_points, 6);
+        assert_eq!(row.total_points, 9.5);
+        assert_eq!(row.available_points, 6.5);
         assert_eq!(
             (row.courage, row.will, row.labor, row.persistence),
             (2, 0, 1, 0)

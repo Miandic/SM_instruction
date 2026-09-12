@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS score_entries (
     organizer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     booking_id   INTEGER REFERENCES bookings(id) ON DELETE SET NULL,
     kind         TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('test', 'task', 'manual')),
-    points       INTEGER NOT NULL,
+    -- SQLite сохраняет здесь как целые оценки организатора, так и ручные
+    -- начисления администратора с шагом 0,5.
+    points       REAL NOT NULL,
     comment      TEXT NOT NULL DEFAULT '',
     created_at   INTEGER NOT NULL
 );

@@ -95,11 +95,34 @@ pub async fn rating(
     _user: AuthUser,
 ) -> ApiResult<Json<Vec<RatingRow>>> {
     let rows = sqlx::query_as::<_, RatingRow>(&format!(
-        "SELECT g.id, g.name, g.department, c.name AS character_name,
-                COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) AS total_points,
-                1 + COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) / {LEVEL_STEP} AS level
-         FROM groups g LEFT JOIN characters c ON c.id = g.character_id
-         ORDER BY total_points DESC, g.name"
+        "WITH administration_cutoffs AS (
+             SELECT b.group_id,
+                    MIN(COALESCE(b.scheduled_starts_at, s.starts_at)) AS starts_at
+             FROM bookings b
+             JOIN slots s ON s.id = b.slot_id
+             JOIN points p ON p.id = s.point_id
+             WHERE p.kind = 'mandatory' AND p.name = 'Администрация'
+               AND b.status IN ('active', 'completed')
+             GROUP BY b.group_id
+         ),
+         rating_totals AS (
+             SELECT g.id AS group_id,
+                    CAST(COALESCE(SUM(CASE
+                        WHEN se.kind = 'manual' OR ac.starts_at IS NULL
+                             OR se.created_at <= ac.starts_at
+                        THEN se.points ELSE 0 END), 0) AS REAL) AS total_points
+             FROM groups g
+             LEFT JOIN administration_cutoffs ac ON ac.group_id = g.id
+             LEFT JOIN score_entries se ON se.group_id = g.id
+             GROUP BY g.id
+         )
+         SELECT g.id, g.name, g.department, c.name AS character_name,
+                rt.total_points,
+                CAST(1 + rt.total_points / {LEVEL_STEP} AS INTEGER) AS level
+         FROM groups g
+         LEFT JOIN characters c ON c.id = g.character_id
+         JOIN rating_totals rt ON rt.group_id = g.id
+         ORDER BY rt.total_points DESC, g.name"
     ))
     .fetch_all(&state.db)
     .await?;
@@ -113,8 +136,8 @@ pub async fn group_detail(
 ) -> ApiResult<Json<Value>> {
     let group = sqlx::query_as::<_, RatingRow>(&format!(
         "SELECT g.id, g.name, g.department, c.name AS character_name,
-                COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) AS total_points,
-                1 + COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) / {LEVEL_STEP} AS level
+                CAST(COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) AS REAL) AS total_points,
+                CAST(1 + COALESCE((SELECT SUM(points) FROM score_entries se WHERE se.group_id = g.id), 0) / {LEVEL_STEP} AS INTEGER) AS level
          FROM groups g LEFT JOIN characters c ON c.id = g.character_id
          WHERE g.id = ?"
     ))
@@ -125,7 +148,8 @@ pub async fn group_detail(
 
     let scores = sqlx::query_as::<_, ScoreView>(
         "SELECT se.id, se.group_id, g.name AS group_name, se.point_id, p.name AS point_name,
-                u.display_name AS organizer_name, se.kind, se.points, se.comment, se.created_at
+                u.display_name AS organizer_name, se.kind, CAST(se.points AS REAL) AS points,
+                se.comment, se.created_at
          FROM score_entries se
          JOIN groups g ON g.id = se.group_id
          JOIN points p ON p.id = se.point_id
@@ -149,7 +173,7 @@ pub async fn group_detail(
     .await?;
 
     let (stats, spent) = load_stats(&state, id).await?;
-    let available = (group.total_points - spent).max(0);
+    let available = (group.total_points - spent as f64).max(0.0);
 
     Ok(Json(json!({
         "group": group,
@@ -213,18 +237,19 @@ pub async fn upgrade_stat(
     // соединении: два запроса подряд не смогут потратить одни и те же баллы.
     let mut tx = state.db_w.begin().await?;
 
-    let total: i64 =
-        sqlx::query_scalar("SELECT COALESCE(SUM(points), 0) FROM score_entries WHERE group_id = ?")
-            .bind(group_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let total: f64 = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(SUM(points), 0) AS REAL) FROM score_entries WHERE group_id = ?",
+    )
+    .bind(group_id)
+    .fetch_one(&mut *tx)
+    .await?;
     let spent: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(spent), 0) FROM group_stats WHERE group_id = ?")
             .bind(group_id)
             .fetch_one(&mut *tx)
             .await?;
 
-    if total - spent < UPGRADE_COST {
+    if total - (spent as f64) < UPGRADE_COST as f64 {
         return Err(ApiError::Conflict("не хватает очков".into()));
     }
 
@@ -246,7 +271,7 @@ pub async fn upgrade_stat(
     Ok(Json(json!({
         "stat": body.stat,
         "value": value,
-        "available": total - spent - UPGRADE_COST,
+        "available": total - spent as f64 - UPGRADE_COST as f64,
     })))
 }
 
@@ -294,7 +319,99 @@ mod tests {
     use crate::auth::ROLE_LEADER;
 
     #[tokio::test]
-    async fn upgrade_spends_one_earned_point_for_one_stat_level() {
+    async fn rating_ignores_late_organizer_scores_but_includes_manual_scores() {
+        let path = std::env::temp_dir().join(format!(
+            "sm-instruction-rating-cutoff-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let path_text = path.to_string_lossy().into_owned();
+        let (db, db_w) = crate::db::init(&path_text).await.unwrap();
+        let state = AppState {
+            db: db.clone(),
+            db_w: db_w.clone(),
+        };
+
+        let group_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM groups ORDER BY id LIMIT 2")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        let administration_id: i64 =
+            sqlx::query_scalar("SELECT id FROM points WHERE name = 'Администрация'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        let slot_id = sqlx::query(
+            "INSERT INTO slots (point_id, starts_at, ends_at, capacity) VALUES (?, 100, 200, 1)",
+        )
+        .bind(administration_id)
+        .execute(&db_w)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO bookings
+                (slot_id, group_id, status, scheduled_starts_at, scheduled_ends_at,
+                 mandatory, created_at)
+             VALUES (?, ?, 'active', 150, 170, 1, 50)",
+        )
+        .bind(slot_id)
+        .bind(group_ids[0])
+        .execute(&db_w)
+        .await
+        .unwrap();
+
+        for (group_id, points, created_at) in [
+            (group_ids[0], 1.0, 149),
+            (group_ids[0], 2.0, 150),
+            (group_ids[0], 100.0, 151),
+            (group_ids[1], 4.0, 151),
+        ] {
+            sqlx::query(
+                "INSERT INTO score_entries
+                    (group_id, point_id, kind, points, comment, created_at)
+                 VALUES (?, ?, 'task', ?, '', ?)",
+            )
+            .bind(group_id)
+            .bind(administration_id)
+            .bind(points)
+            .bind(created_at)
+            .execute(&db_w)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO score_entries
+                (group_id, point_id, kind, points, comment, created_at)
+             VALUES (?, ?, 'manual', 7.5, '', 152)",
+        )
+        .bind(group_ids[0])
+        .bind(administration_id)
+        .execute(&db_w)
+        .await
+        .unwrap();
+
+        let user = AuthUser {
+            id: 1,
+            role: ROLE_LEADER.into(),
+            group_id: Some(group_ids[0]),
+            point_id: None,
+        };
+        let Json(rows) = rating(State(state), user).await.unwrap();
+        let cutoff_group = rows.iter().find(|row| row.id == group_ids[0]).unwrap();
+        let unrestricted_group = rows.iter().find(|row| row.id == group_ids[1]).unwrap();
+
+        assert_eq!(cutoff_group.total_points, 10.5);
+        assert_eq!(unrestricted_group.total_points, 4.0);
+
+        db.close().await;
+        db_w.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn upgrade_spends_one_point_and_preserves_half_point_balance() {
         let path = std::env::temp_dir().join(format!(
             "sm-instruction-upgrade-{}.db",
             uuid::Uuid::new_v4()
@@ -317,7 +434,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO score_entries
                 (group_id, point_id, kind, points, comment, created_at)
-             VALUES (?, ?, 'manual', 1, '', ?)",
+             VALUES (?, ?, 'manual', 1.5, '', ?)",
         )
         .bind(group_id)
         .bind(point_id)
@@ -343,7 +460,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(result["value"], 1);
-        assert_eq!(result["available"], 0);
+        assert_eq!(result["available"], 0.5);
         let row: (i64, i64) = sqlx::query_as(
             "SELECT value, spent FROM group_stats WHERE group_id = ? AND stat = 'courage'",
         )

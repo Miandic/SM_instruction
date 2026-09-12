@@ -2,7 +2,7 @@
    админка. Разметка мобильная — таблицы остались только в админке. */
 
 import {
-  $, api, apiForm, ask, askText, esc, state, flash, fmtT, fmtDT, nums,
+  $, api, apiForm, ask, askText, esc, state, flash, fmtT, fmtDT, fmtPoints, nums,
   ROLE_LABELS, roleLabel, STATUS_LABELS, KIND_LABELS, SCORE_KIND_LABELS,
   bindActions, bindForms,
 } from './core.js';
@@ -143,7 +143,7 @@ RENDERERS.team = async () => {
         </div>
         <div>
           <span class="hero-stat__label">Баллы</span>
-          <span class="hero-stat__value">${g.total_points}</span>
+          <span class="hero-stat__value">${fmtPoints(g.total_points)}</span>
         </div>
       </div>`;
   } else if (state.me.role === 'leader') {
@@ -159,7 +159,7 @@ RENDERERS.team = async () => {
       </div>
       <p class="note note--warn">Выбор окончательный — поменять сможет только админ.</p>`;
   } else {
-    charBlock = `<p class="note">Персонаж ещё не выбран старостой. Баллы команды: ${g.total_points}.</p>`;
+    charBlock = `<p class="note">Персонаж ещё не выбран старостой. Баллы команды: ${fmtPoints(g.total_points)}.</p>`;
   }
 
   const bookings = d.bookings.length ? `<div class="list">` + d.bookings.map(b => `
@@ -182,7 +182,7 @@ RENDERERS.team = async () => {
     <div class="item">
       <div class="item__head">
         <b>${esc(s.point_name)}</b>
-        <span class="points">+${s.points}</span>
+        <span class="points">+${fmtPoints(s.points)}</span>
       </div>
       <div class="item__meta">${SCORE_KIND_LABELS[s.kind] || esc(s.kind)} · ${fmtDT(s.created_at)}${
         s.organizer_name ? ' · ' + esc(s.organizer_name) : ''}</div>
@@ -222,7 +222,7 @@ RENDERERS.rating = async () => {
               <span class="rank__meta">СМ${r.department} · ${esc(r.character_name ?? 'без персонажа')}</span>
             </span>
             <span class="rank__stats">
-              <span class="rank__points">${r.total_points}</span>
+              <span class="rank__points">${fmtPoints(r.total_points)}</span>
               <span class="rank__level">ур. ${r.level}</span>
             </span>
           </li>`).join('')}
@@ -306,7 +306,7 @@ const progressionCharacter = row => `${row.group_name} — ${row.character_name 
 
 function progressionTsv(rows) {
   return [progressionHeaders, ...rows.map(row => [
-    progressionCharacter(row), row.total_points, row.available_points,
+    progressionCharacter(row), fmtPoints(row.total_points), fmtPoints(row.available_points),
     row.courage, row.will, row.labor, row.persistence,
     row.updated_at ? fmtDT(row.updated_at) : '—',
   ])].map(row => row.map(tsvCell).join('\t')).join('\n');
@@ -325,8 +325,8 @@ RENDERERS.progression = async () => {
           <tr>${progressionHeaders.map(header => `<th>${header}</th>`).join('')}</tr>
           ${rows.map(row => `<tr>
             <td>${esc(progressionCharacter(row))}</td>
-            <td>${row.total_points}</td>
-            <td>${row.available_points}</td>
+            <td>${fmtPoints(row.total_points)}</td>
+            <td>${fmtPoints(row.available_points)}</td>
             <td>${row.courage}</td>
             <td>${row.will}</td>
             <td>${row.labor}</td>
@@ -581,7 +581,7 @@ RENDERERS.admin = async () => {
               <td>${esc(s.group_name)}</td>
               <td>${esc(s.point_name)}</td>
               <td>${SCORE_KIND_LABELS[s.kind] || esc(s.kind)}</td>
-              <td><span class="points">+${s.points}</span></td>
+              <td><span class="points">+${fmtPoints(s.points)}</span></td>
               <td>${esc(s.organizer_name ?? '—')}</td>
               <td><button class="btn btn--sm btn--danger" data-act="del"
                           data-path="/admin/scores/${s.id}" data-what="начисление">Удалить</button></td>
@@ -590,7 +590,7 @@ RENDERERS.admin = async () => {
         <form data-form="create-score" class="inline-form">
           <select name="group_id" required>${groupOpts}</select>
           <select name="point_id" required>${pointOpts}</select>
-          <input name="points" type="number" placeholder="Баллы" class="w-num" required>
+          <input name="points" type="number" step="0.5" placeholder="Баллы" class="w-num" required>
           <input name="comment" placeholder="Комментарий">
           <button class="btn btn--primary">Начислить</button>
         </form>
@@ -663,7 +663,7 @@ const ACTIONS = {
     const body = { booking_id: Number(id), comment: $('#cmt-' + id).value };
     if (task === 'true') body.task_points = Number($('#task-' + id).value);
     const d = await api('/organizer/complete', 'POST', body);
-    flash(d.points ? `Визит завершён, начислено ${d.points} баллов` : 'Визит отмечен');
+    flash(d.points ? `Визит завершён, начислено ${fmtPoints(d.points)} баллов` : 'Визит отмечен');
     await reload();
   },
 

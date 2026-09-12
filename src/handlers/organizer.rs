@@ -23,9 +23,9 @@ pub async fn bookings(
                 COALESCE(b.scheduled_starts_at, s.starts_at) AS starts_at,
                 COALESCE(b.scheduled_ends_at, s.ends_at) AS ends_at, b.location,
                 b.created_at,
-                (SELECT points FROM score_entries se
+                (SELECT CAST(points AS INTEGER) FROM score_entries se
                   WHERE se.booking_id = b.id AND se.kind = 'test') AS test_points,
-                (SELECT points FROM score_entries se
+                (SELECT CAST(points AS INTEGER) FROM score_entries se
                   WHERE se.booking_id = b.id AND se.kind = 'task') AS task_points
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id

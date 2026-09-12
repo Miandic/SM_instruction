@@ -14,6 +14,9 @@ export const fmtT = ts => new Date(ts * 1000)
 export const fmtDT = ts => new Date(ts * 1000)
   .toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+/** Баллы бывают целыми или половинными; показываем их в русской записи без лишнего нуля. */
+export const fmtPoints = value => Number(value).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+
 export const ROLE_LABELS = { admin: 'Админ', leader: 'Староста', student: 'Студент', organizer: 'Организатор' };
 export const STATUS_LABELS = { active: 'активна', completed: 'пройдена', cancelled: 'отменена' };
 
