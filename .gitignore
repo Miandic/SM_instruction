@@ -9,6 +9,7 @@
 *.log
 /static/uploads/
 /private-deploy/
+/tmp/
 
 # Local assistant/editor settings
 /.claude/
