@@ -83,12 +83,12 @@ export const PARTNERS = [
     href: 'http://rvr.timatikarting.ru',
   },
   {
-    id: 'mosigra', name: 'Мосигра (Hobby Games)', image: '/img/partners/mosigra.png',
+    id: 'mosigra', name: 'Hobby Games', image: '/img/partners/mosigra.png',
     text: 'Hobby Games — крупнейшая сеть магазинов настольных игр для любого настроения и компании. Здесь найдутся семейные, стратегические, карточные и тактические игры, а также сборные модели и подарки. Выбирай свою игру и собирай друзей на незабываемый вечер!',
     href: 'https://hobbygames.ru/',
   },
   {
-    id: 'ballers-street', name: 'ballers street', image: '/img/partners/ballers-street.jpg',
+    id: 'ballers-street', name: 'Развлекательный центр «Ballers Street»', image: '/img/partners/ballers-street.jpg',
     text: 'Развлекательный центр «Ballers Street» - место для семейного отдыха. Здесь вы можете весело провести время, сыграть в боулинг, бильярд и PS5. VIP-дорожки для приватной обстановки. Караоке и зона танцпола на втором этаже. Находится в ТРЦ "Ривьера" на втором этаже, работает: пн-чт 10:00 - 22:00, пт-вс 10:00-00:00. Бронируйте запись онлайн на сайте: ballers.moscow',
     href: 'https://ballers.moscow/',
   },
@@ -108,7 +108,7 @@ export const PARTNERS = [
     href: 'https://vk.ru/terra_games',
   },
   {
-    id: 'rusana', name: 'Швейное предприятие «Русана»', image: '/img/partners/rusana.png',
+    id: 'rusana', name: 'Швейное предприятие "Русана"', image: '/img/partners/rusana.png',
     text: 'Швейное предприятие «Русана» создаёт современную спецодежду и промо-одежду, сочетая комфорт, практичность и стиль. Бомберы, жилеты и куртки для студенческих отрядов можно дополнить вышивкой или печатью, превращая одежду в яркий и узнаваемый мерч для команды.',
     href: 'https://uniforma-rusana.com/catalog/merch/',
   },
